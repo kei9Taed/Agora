@@ -1,12 +1,15 @@
 package com.newoether.agora.tool
 
 import androidx.core.text.HtmlCompat
+import com.newoether.agora.api.CffiSearchBridge
 import com.newoether.agora.api.DuckDuckGoScraper
 import com.newoether.agora.api.HttpClient
 import com.newoether.agora.api.ToolDefinition
 import com.newoether.agora.api.ToolFunction
 import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
+import com.newoether.agora.sandbox.SandboxManager
+import com.newoether.agora.sandbox.SandboxManagerFactory
 import com.newoether.agora.util.Constants
 import com.newoether.agora.data.normalizeWebSearchProvider
 import com.newoether.agora.viewmodel.GenerationContext
@@ -85,20 +88,83 @@ internal fun normalizeKagiSearchResponse(
     }.toString()
 }
 
+/**
+ * Providers that may be tried after the primary one fails.
+ *
+ * Order is deliberate: keyless/local backends first (no billing surprise), then keyed
+ * providers the user has already configured. `duckduckgo_cffi` is only offered when the
+ * on-device sandbox can actually run it.
+ */
+internal val WEB_SEARCH_FALLBACK_ORDER = listOf("searxng", "brave", "serper", "tavily", "kagi")
+
+/**
+ * Full attempt order for one `web_search` call.
+ *
+ * Pure function so the policy stays unit-testable: the executor, not the model, decides
+ * whether a failed provider is retried elsewhere.
+ */
+internal fun webSearchAttemptOrder(
+    primary: String,
+    apiKeys: Map<String, String>,
+    searxngBaseUrl: String,
+    cffiAvailable: Boolean,
+): List<String> = buildList {
+    add(primary)
+    if (primary == "duckduckgo" && cffiAvailable) add("duckduckgo_cffi")
+    for (provider in WEB_SEARCH_FALLBACK_ORDER) {
+        if (provider in this) continue
+        when {
+            provider == "searxng" -> if (searxngBaseUrl.isNotBlank()) add(provider)
+            !apiKeys[provider].isNullOrBlank() -> add(provider)
+        }
+    }
+}
+
+/** Returns the machine-readable `error` code of a web_search JSON payload, if any. */
+internal fun webSearchErrorCode(resultJson: String): String? = runCatching {
+    val obj = Json.parseToJsonElement(resultJson).jsonObject
+    (obj["error"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+}.getOrNull()
+
+/** Attaches provenance so the model can tell a degraded answer from a clean one. */
+private fun annotateSearchResult(resultJson: String, provider: String, tried: List<String>): String =
+    runCatching {
+        val obj = Json.parseToJsonElement(resultJson).jsonObject
+        buildJsonObject {
+            obj.forEach { (key, value) -> put(key, value) }
+            put("provider", provider)
+            if (tried.size > 1) put("fallback_attempts", buildJsonArray {
+                tried.forEach { add(JsonPrimitive(it)) }
+            })
+        }.toString()
+    }.getOrDefault(resultJson)
+
 internal fun webSearchProviderDisplayName(provider: String): String = when (provider) {
     "kagi" -> "Kagi"
     "serper" -> "Serper"
     "tavily" -> "Tavily"
     "searxng" -> "SearXNG"
     "duckduckgo" -> "DuckDuckGo"
+    "duckduckgo_cffi" -> "DuckDuckGo (curl_cffi)"
     else -> "Brave Search"
 }
 
-class WebSearchToolProvider : ToolProvider {
+class WebSearchToolProvider(
+    private val sandboxFactory: SandboxManagerFactory? = null,
+) : ToolProvider {
     private val webClient = HttpClient.client.newBuilder()
         .callTimeout(Constants.NETWORK_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .readTimeout(Constants.NETWORK_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .build()
+
+    /** Created lazily: Play builds have no sandbox and must never pay for one. */
+    private val sandbox: SandboxManager? by lazy {
+        runCatching { sandboxFactory?.create() }.getOrNull()
+    }
+
+    private val cffiAvailable: Boolean by lazy {
+        runCatching { sandboxFactory?.isAvailable() == true }.getOrDefault(false)
+    }
 
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
         if (!ctx.webSearchEnabled) return emptyList()
@@ -120,7 +186,7 @@ class WebSearchToolProvider : ToolProvider {
                 parameters = ToolParameters(
                     properties = mapOf(
                         "url" to ToolProperty("string", "The URL of the page to fetch."),
-                        "maxChars" to ToolProperty("integer", "Maximum characters of text to return (default 8000, max 100000). If the result has \"truncated\": true, call again with a larger maxChars to get more.")
+                        "maxChars" to ToolProperty("integer", "Maximum characters of text to return (default 8000, max 100000). If the result has \"truncated\": true, call again with a larger maxChars.")
                     ),
                     required = listOf("url")
                 )
@@ -142,170 +208,216 @@ class WebSearchToolProvider : ToolProvider {
 
     override fun handles(name: String): Boolean = name in setOf("web_search", "web_fetch")
 
-    private fun executeWebSearch(arguments: String, ctx: GenerationContext): String {
+    private suspend fun executeWebSearch(arguments: String, ctx: GenerationContext): String {
         val argsStr = arguments.ifBlank { "{}" }
         val args = Json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(argsStr)
         val query = (args["query"] as? JsonPrimitive)?.content
             ?: return buildJsonObject { put("type", "web_search"); put("error", "no_query") }.toString()
         val numResults = ((args["num_results"] as? JsonPrimitive)?.content?.toIntOrNull() ?: ctx.webSearchNumResults).coerceIn(1, 10)
-        val provider = normalizeWebSearchProvider(ctx.webSearchProvider)
+        val primary = normalizeWebSearchProvider(ctx.webSearchProvider)
 
-        return try {
+        val order = webSearchAttemptOrder(
+            primary = primary,
+            apiKeys = ctx.webSearchApiKeys,
+            searxngBaseUrl = ctx.webSearchBaseUrl,
+            cffiAvailable = cffiAvailable,
+        )
+
+        val tried = mutableListOf<String>()
+        var lastResult = ""
+        for (provider in order) {
+            val result = searchWithProvider(provider, query, numResults, ctx)
+            tried.add(provider)
+            lastResult = result
+            if (webSearchErrorCode(result) == null) {
+                return annotateSearchResult(result, provider, tried)
+            }
+        }
+
+        return annotateSearchResult(lastResult, tried.lastOrNull() ?: primary, tried)
+    }
+
+    /** Runs one provider and returns its normalized JSON payload (success or error). */
+    private suspend fun searchWithProvider(
+        provider: String,
+        query: String,
+        numResults: Int,
+        ctx: GenerationContext,
+    ): String = try {
+        when (provider) {
             // DuckDuckGo is a scraper, not an API — handle it separately.
-            if (provider == "duckduckgo") {
+            "duckduckgo" -> {
                 val scraper = DuckDuckGoScraper(webClient)
-                return when (val r = scraper.search(query, numResults)) {
-                    is DuckDuckGoScraper.SearchResponse.Success -> {
-                        val rawResults = buildJsonArray {
-                            r.results.forEach { result ->
-                                add(buildJsonObject {
-                                    put("title", result.title)
-                                    put("url", result.url)
-                                    put("description", result.snippet)
-                                })
-                            }
-                        }
-                        buildJsonObject {
-                            put("type", "web_search")
-                            put("query", query)
-                            put("results", rawResults)
-                        }.toString()
-                    }
-                    is DuckDuckGoScraper.SearchResponse.Error -> {
-                        buildJsonObject {
-                            put("type", "web_search")
-                            put("query", query)
-                            put("error", r.type.name.lowercase())
-                            put("message", r.message)
-                        }.toString()
-                    }
-                }
+                duckDuckGoJson(scraper.search(query, numResults), query)
             }
-
-            val apiKey = ctx.webSearchApiKeys[provider].orEmpty()
-            if (provider != "searxng" && apiKey.isBlank()) {
-                return buildJsonObject {
-                    put("type", "web_search")
-                    put("query", query)
-                    put("error", "no_api_key")
-                    put("provider", webSearchProviderDisplayName(provider))
-                }.toString()
-            }
-            val body = when (provider) {
-                "kagi" -> HttpClient.post(
-                    "https://kagi.com/api/v1/search",
-                    kagiSearchRequestBody(query, numResults),
-                    mapOf(
-                        "Accept" to "application/json",
-                        "Authorization" to "Bearer $apiKey",
-                    ),
-                    callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
-                )
-                "serper" -> HttpClient.post(
-                    "https://google.serper.dev/search",
-                    Json.encodeToString(buildJsonObject { put("q", query); put("num", numResults) }),
-                    mapOf("X-API-KEY" to apiKey),
-                    callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
-                )
-                "tavily" -> HttpClient.post(
-                    "https://api.tavily.com/search",
-                    Json.encodeToString(buildJsonObject {
-                        put("api_key", apiKey)
+            "duckduckgo_cffi" -> {
+                val manager = sandbox
+                    ?: return buildJsonObject {
+                        put("type", "web_search")
                         put("query", query)
-                        put("max_results", numResults)
-                        put("search_depth", "advanced")
-                        put("include_answer", true)
-                    }),
-                    emptyMap(),
-                    callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
-                )
-                "searxng" -> {
-                    // Don't pin engines=google,brave: many public/self-hosted SearXNG instances
-                    // disable those engines (rate-limited/require config), and pinning them yields
-                    // an empty result set. Letting the instance use its own default-enabled engines
-                    // matches how other SearXNG clients behave. Send a browser-like User-Agent so
-                    // bot-filtering instances don't 403 us (same reason web_fetch sets one).
-                    HttpClient.fetchModels(
-                        searxngSearchUrl(ctx.webSearchBaseUrl, query),
-                        mapOf("User-Agent" to Constants.WEB_FETCH_USER_AGENT),
-                        callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
-                    )
-                }
-                else -> HttpClient.fetchModels(
-                    "https://api.search.brave.com/res/v1/web/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}&count=$numResults",
-                    mapOf("Accept" to "application/json", "X-Subscription-Token" to apiKey),
-                    callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
-                )
-            } ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_response") }.toString()
-
-            if (provider == "kagi") {
-                return normalizeKagiSearchResponse(body, query, numResults)
+                        put("error", "sandbox_unavailable")
+                        put("message", "The Local Sandbox is not available in this build.")
+                    }.toString()
+                duckDuckGoJson(CffiSearchBridge(manager).search(query, numResults), query)
             }
+            else -> searchWithApiProvider(provider, query, numResults, ctx)
+        }
+    } catch (e: Exception) {
+        buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("error", "search_error")
+            put("message", e.message ?: "")
+        }.toString()
+    }
 
-            val json: Map<String, kotlinx.serialization.json.JsonElement> = Json.decodeFromString(body)
-
-            if (provider == "tavily") {
-                val resultsArray = json["results"]?.jsonArray
-                    ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
-                if (resultsArray.isEmpty())
-                    return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
-                val answer = (json["answer"] as? JsonPrimitive)?.content
-                val rawResults = buildJsonArray {
-                    for (element in resultsArray) {
-                        val obj = element.jsonObject
-                        add(buildJsonObject {
-                            put("title", (obj["title"] as? JsonPrimitive)?.content ?: "")
-                            put("url", (obj["url"] as? JsonPrimitive)?.content ?: "")
-                            put("content", (obj["content"] as? JsonPrimitive)?.content ?: "")
-                            val score = (obj["score"] as? JsonPrimitive)?.content?.toFloatOrNull()
-                            if (score != null) put("score", score)
-                        })
-                    }
+    private fun duckDuckGoJson(
+        response: DuckDuckGoScraper.SearchResponse,
+        query: String,
+    ): String = when (response) {
+        is DuckDuckGoScraper.SearchResponse.Success -> buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("results", buildJsonArray {
+                response.results.forEach { result ->
+                    add(buildJsonObject {
+                        put("title", result.title)
+                        put("url", result.url)
+                        put("description", result.snippet)
+                    })
                 }
-                return buildJsonObject {
-                    put("type", "web_search")
+            })
+        }.toString()
+        is DuckDuckGoScraper.SearchResponse.Error -> buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("error", response.type.name.lowercase())
+            put("message", response.message)
+        }.toString()
+    }
+
+    private suspend fun searchWithApiProvider(
+        provider: String,
+        query: String,
+        numResults: Int,
+        ctx: GenerationContext,
+    ): String {
+        val apiKey = ctx.webSearchApiKeys[provider].orEmpty()
+        if (provider != "searxng" && apiKey.isBlank()) {
+            return buildJsonObject {
+                put("type", "web_search")
+                put("query", query)
+                put("error", "no_api_key")
+                put("provider", webSearchProviderDisplayName(provider))
+            }.toString()
+        }
+        val body = when (provider) {
+            "kagi" -> HttpClient.post(
+                "https://kagi.com/api/v1/search",
+                kagiSearchRequestBody(query, numResults),
+                mapOf(
+                    "Accept" to "application/json",
+                    "Authorization" to "Bearer $apiKey",
+                ),
+                callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
+            )
+            "serper" -> HttpClient.post(
+                "https://google.serper.dev/search",
+                Json.encodeToString(buildJsonObject { put("q", query); put("num", numResults) }),
+                mapOf("X-API-KEY" to apiKey),
+                callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
+            )
+            "tavily" -> HttpClient.post(
+                "https://api.tavily.com/search",
+                Json.encodeToString(buildJsonObject {
+                    put("api_key", apiKey)
                     put("query", query)
-                    if (!answer.isNullOrBlank()) put("answer", answer)
-                    put("results", rawResults)
-                }.toString()
+                    put("max_results", numResults)
+                    put("search_depth", "advanced")
+                    put("include_answer", true)
+                }),
+                emptyMap(),
+                callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
+            )
+            "searxng" -> {
+                // Don't pin engines=google,brave: many public/self-hosted SearXNG instances
+                // disable those engines (rate-limited/require config), and pinning them yields
+                // an empty result set. Letting the instance use its own default-enabled engines
+                // matches how other SearXNG clients behave. Send a browser-like User-Agent so
+                // bot-filtering instances don't 403 us (same reason web_fetch sets one).
+                HttpClient.fetchModels(
+                    searxngSearchUrl(ctx.webSearchBaseUrl, query),
+                    mapOf("User-Agent" to Constants.WEB_FETCH_USER_AGENT),
+                    callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
+                )
             }
+            else -> HttpClient.fetchModels(
+                "https://api.search.brave.com/res/v1/web/search?q=${java.net.URLEncoder.encode(query, "UTF-8")}&count=$numResults",
+                mapOf("Accept" to "application/json", "X-Subscription-Token" to apiKey),
+                callTimeoutMillis = Constants.NETWORK_TOOL_TIMEOUT_MS,
+            )
+        } ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_response") }.toString()
 
-            val resultsArray = when {
-                json.containsKey("organic") -> json["organic"]?.jsonArray
-                json.containsKey("web") -> {
-                    val web = json["web"]?.jsonObject
-                    web?.get("results")?.jsonArray
-                }
-                json.containsKey("results") -> json["results"]?.jsonArray
-                else -> null
-            } ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
+        if (provider == "kagi") {
+            return normalizeKagiSearchResponse(body, query, numResults)
+        }
 
+        val json: Map<String, kotlinx.serialization.json.JsonElement> = Json.decodeFromString(body)
+
+        if (provider == "tavily") {
+            val resultsArray = json["results"]?.jsonArray
+                ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
             if (resultsArray.isEmpty())
                 return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
-
+            val answer = (json["answer"] as? JsonPrimitive)?.content
             val rawResults = buildJsonArray {
                 for (element in resultsArray) {
                     val obj = element.jsonObject
                     add(buildJsonObject {
                         put("title", (obj["title"] as? JsonPrimitive)?.content ?: "")
-                        put("url", (obj["link"] as? JsonPrimitive)?.content ?: (obj["url"] as? JsonPrimitive)?.content ?: "")
-                        put("description", (obj["snippet"] as? JsonPrimitive)?.content ?: (obj["content"] as? JsonPrimitive)?.content ?: (obj["description"] as? JsonPrimitive)?.content ?: "")
+                        put("url", (obj["url"] as? JsonPrimitive)?.content ?: "")
+                        put("content", (obj["content"] as? JsonPrimitive)?.content ?: "")
+                        val score = (obj["score"] as? JsonPrimitive)?.content?.toFloatOrNull()
+                        if (score != null) put("score", score)
                     })
                 }
             }
-            buildJsonObject {
+            return buildJsonObject {
                 put("type", "web_search")
                 put("query", query)
+                if (!answer.isNullOrBlank()) put("answer", answer)
                 put("results", rawResults)
             }.toString()
-        } catch (e: Exception) {
-            buildJsonObject {
-                put("type", "web_search")
-                put("query", query)
-                put("error", "search_error")
-                put("message", e.message ?: "")
-            }.toString()
         }
+
+        val resultsArray = when {
+            json.containsKey("organic") -> json["organic"]?.jsonArray
+            json.containsKey("web") -> {
+                val web = json["web"]?.jsonObject
+                web?.get("results")?.jsonArray
+            }
+            json.containsKey("results") -> json["results"]?.jsonArray
+            else -> null
+        } ?: return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
+
+        if (resultsArray.isEmpty())
+            return buildJsonObject { put("type", "web_search"); put("query", query); put("error", "no_results") }.toString()
+
+        val rawResults = buildJsonArray {
+            for (element in resultsArray) {
+                val obj = element.jsonObject
+                add(buildJsonObject {
+                    put("title", (obj["title"] as? JsonPrimitive)?.content ?: "")
+                    put("url", (obj["link"] as? JsonPrimitive)?.content ?: (obj["url"] as? JsonPrimitive)?.content ?: "")
+                    put("description", (obj["snippet"] as? JsonPrimitive)?.content ?: (obj["content"] as? JsonPrimitive)?.content ?: (obj["description"] as? JsonPrimitive)?.content ?: "")
+                })
+            }
+        }
+        return buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("results", rawResults)
+        }.toString()
     }
 
     private suspend fun executeWebFetch(arguments: String, ctx: GenerationContext): String {

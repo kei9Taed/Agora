@@ -1,5 +1,6 @@
 package com.newoether.agora.api
 
+import com.newoether.agora.util.Constants
 import com.newoether.agora.util.executeWithNetworkRetry
 
 import okhttp3.FormBody
@@ -10,36 +11,33 @@ import java.net.URLDecoder
 import java.net.URLEncoder
 
 /**
- * Lightweight DuckDuckGo Lite search scraper with auto-pagination.
+ * DuckDuckGo HTML search scraper with auto-pagination.
  *
- * Scrapes [https://lite.duckduckgo.com/lite/](https://lite.duckduckgo.com/lite/) — DDG's
- * deliberately-simple HTML interface — and returns structured [SearchResult]s.
- * When more results are requested than a single page provides, subsequent pages
- * are fetched automatically using DDG's native pagination (the `vqd` token + `s` offset).
- * Results are deduplicated by URL across pages.
+ * Scrapes [https://html.duckduckgo.com/html/](https://html.duckduckgo.com/html/) — DDG's
+ * no-JavaScript results page — and returns structured [WebResult]s. Subsequent pages are
+ * fetched with DDG's own pagination form (`q` + `s` + `vqd`, plus `dc`/`v`/`o`/`api`).
+ *
+ * **Why this endpoint and not `lite.duckduckgo.com`**
+ * The `/lite/` POST endpoint sends an `anomaly-modal` CAPTCHA challenge to almost any
+ * non-browser client, including clients that only spoof the User-Agent (measured: same IP,
+ * same query, `lite/` POST → HTTP 202 + challenge, `html/` GET → HTTP 200 + 10 results).
+ * The browser-like [Constants.WEB_FETCH_USER_AGENT] is therefore required here; the old
+ * `Agora/1.0` token triggered bot protection on both endpoints.
  *
  * **Design**
  * - Zero coupling to ToolProvider, GenerationContext, or UI layers.
  * - OkHttpClient is injected; defaults to the shared [HttpClient.client] singleton.
  * - Regex-only HTML parsing — no Jsoup or other third-party dependency.
  * - DDG redirect URLs (`//duckduckgo.com/l/?uddg=...`) are transparently decoded.
+ * - Both the current `result__a` / `result__snippet` markup and the legacy
+ *   `result-link` / `result-snippet` markup are accepted.
  * - Errors are reported via [SearchResponse] with machine-readable [SearchErrorType] codes,
- *   so callers (e.g. [com.newoether.agora.tool.WebSearchToolProvider]) can produce
- *   meaningful LLM-facing messages.
- *
- * **Usage**
- * ```kotlin
- * val scraper = DuckDuckGoScraper()
- * when (val r = scraper.search("hello world", maxResults = 15)) {
- *     is SearchResponse.Success -> println("Got ${r.results.size} results")
- *     is SearchResponse.Error -> println("Failed: ${r.type} — ${r.message}")
- * }
- * ```
+ *   so callers (e.g. [com.newoether.agora.tool.WebSearchToolProvider]) can fail over to
+ *   another provider instead of surfacing a dead end to the model.
  *
  * **Stability note**
- * DuckDuckGo may rate-limit or CAPTCHA aggressive clients. This provider is best used
- * as a free / zero-config fallback, not the primary search backend. Normal human-paced
- * usage (a few queries per minute) rarely triggers protections.
+ * DuckDuckGo may still rate-limit or CAPTCHA aggressive clients. This provider is best used
+ * as a free / zero-config fallback, not as the only search backend.
  */
 class DuckDuckGoScraper(
     private val client: OkHttpClient = HttpClient.client,
@@ -68,27 +66,36 @@ class DuckDuckGoScraper(
     }
 
     companion object {
-        private const val BASE_URL = "https://lite.duckduckgo.com/lite/"
-        private const val USER_AGENT = "Mozilla/5.0 (compatible; Agora/1.0)"
+        private const val BASE_URL = "https://html.duckduckgo.com/html/"
         private const val DEFAULT_MAX_RESULTS = 5
         private const val PAGE_SIZE = 10
         private const val MAX_PAGES = 5
 
+        /** Browser-like UA; a custom `Agora/1.0` token is treated as a bot by DDG. */
+        private val USER_AGENT = Constants.WEB_FETCH_USER_AGENT
+        private const val ACCEPT =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        private const val ACCEPT_LANGUAGE = "en-US,en;q=0.9"
+
         // -- parsing -----------------------------------------------------------------
 
-        private val LINK_TAG_REGEX = Regex("""<a\s[^>]*class=['"]result-link['"][^>]*>""")
-        private val LINK_TEXT_REGEX = Regex("""<a\s[^>]*class=['"]result-link['"][^>]*>([\s\S]*?)</a>""")
+        private const val RESULT_CLASS = "(?:result__a|result-link)"
+
+        private val LINK_TAG_REGEX = Regex("""<a\s[^>]*class=['"]$RESULT_CLASS['"][^>]*>""")
+        private val LINK_TEXT_REGEX = Regex("""<a\s[^>]*class=['"]$RESULT_CLASS['"][^>]*>([\s\S]*?)</a>""")
+        private val SNIPPET_ANCHOR_REGEX = Regex("""<a\s[^>]*class=['"]result__snippet['"][^>]*>([\s\S]*?)</a>""")
+        private val SNIPPET_CELL_REGEX = Regex("""<t[dh][^>]*class=['"]result-snippet['"][^>]*>([\s\S]*?)</t[dh]>""")
         private val HREF_REGEX = Regex("""href=['"]([^'"]*?)['"]""")
-        private val SNIPPET_REGEX = Regex("""<td[^>]+class=['"]result-snippet['"][^>]*>([\s\S]*?)</td>""")
         private val UDDG_REGEX = Regex("""uddg=([^&]+)""")
         private val HTML_TAG_REGEX = Regex("<[^>]*>")
         private val CAPTCHA_REGEX = Regex("""anomaly-modal|challenge-form|Unfortunately.*bots""")
 
-        /** Extracts the vqd session token from the Next Page form. */
+        /** Extracts the vqd session token from the pagination form. */
         private val VQD_REGEX = Regex("""name="vqd"\s+value="([^"]*)"""")
-
-        /** Offset value from the Next Page form (e.g. `name="s" value="10"`). */
+        /** Offset value from the pagination form (e.g. `name="s" value="10"`). */
         private val OFFSET_REGEX = Regex("""name="s"\s+value="(\d+)"""")
+        /** `dc` value from the pagination form (e.g. `name="dc" value="11"`). */
+        private val DC_REGEX = Regex("""name="dc"\s+value="(\d+)"""")
     }
 
     // -- public API ----------------------------------------------------------------
@@ -100,21 +107,18 @@ class DuckDuckGoScraper(
      * per-page count (~10). Results are deduplicated by URL. Pagination stops
      * when the target count is reached, no further pages are available, or a
      * page yields zero new unique results.
-     *
-     * Returns [SearchResponse.Error] with a specific [SearchErrorType] when
-     * the search cannot be completed, allowing callers to provide meaningful
-     * feedback to the LLM or user.
      */
     fun search(query: String, maxResults: Int = DEFAULT_MAX_RESULTS): SearchResponse {
         val allResults = mutableListOf<WebResult>()
         val seenUrls = mutableSetOf<String>()
         var offset = 0
         var vqd = ""
+        var dc = ""
 
         for (page in 0 until MAX_PAGES) {
             if (allResults.size >= maxResults) break
 
-            val pageResult = fetchPage(query, offset, vqd)
+            val pageResult = fetchPage(query, offset, vqd, dc)
             when (pageResult) {
                 is PageResult.Success -> {
                     val html = pageResult.html
@@ -131,9 +135,9 @@ class DuckDuckGoScraper(
                         }
                     }
 
-                    // Update vqd for subsequent pages (first page provides the token).
                     if (page == 0) {
                         vqd = VQD_REGEX.find(html)?.groupValues?.get(1).orEmpty()
+                        dc = DC_REGEX.find(html)?.groupValues?.get(1).orEmpty()
                     }
 
                     val pageResults = parseResults(html, maxResults = PAGE_SIZE)
@@ -147,10 +151,10 @@ class DuckDuckGoScraper(
                     }
 
                     if (newInThisPage == 0) break      // No new unique results.
-                    if (vqd.isEmpty()) break            // No Next Page button.
+                    if (vqd.isEmpty()) break            // No Next Page form.
 
                     val nextOffset = OFFSET_REGEX.find(html)?.groupValues?.get(1)?.toIntOrNull()
-                    if (nextOffset == null) break       // Malformed pagination form.
+                    if (nextOffset == null || nextOffset <= offset) break
                     offset = nextOffset
                 }
 
@@ -186,18 +190,33 @@ class DuckDuckGoScraper(
         data class Error(val message: String) : PageResult()
     }
 
-    /** Fetch a single page of search results. */
-    private fun fetchPage(query: String, offset: Int, vqd: String): PageResult {
-        val formBuilder = FormBody.Builder().add("q", query)
-        if (offset > 0 && vqd.isNotEmpty()) {
-            formBuilder.add("s", offset.toString())
-            formBuilder.add("vqd", vqd)
+    /** Fetch a single page of search results (GET for the first page, POST for the rest). */
+    private fun fetchPage(query: String, offset: Int, vqd: String, dc: String): PageResult {
+        val builder = if (offset == 0) {
+            Request.Builder()
+                .url("$BASE_URL?q=" + URLEncoder.encode(query, Charsets.UTF_8.name()))
+                .get()
+        } else {
+            val formBuilder = FormBody.Builder()
+                .add("q", query)
+                .add("s", offset.toString())
+                .add("nextParams", "")
+                .add("v", "l")
+                .add("o", "json")
+                .add("api", "d.js")
+                .add("vqd", vqd)
+                .add("kl", "wt-wt")
+            if (dc.isNotEmpty()) formBuilder.add("dc", dc)
+            Request.Builder()
+                .url(BASE_URL)
+                .post(formBuilder.build())
         }
 
-        val request = Request.Builder()
-            .url(BASE_URL)
+        val request = builder
             .header("User-Agent", USER_AGENT)
-            .post(formBuilder.build())
+            .header("Accept", ACCEPT)
+            .header("Accept-Language", ACCEPT_LANGUAGE)
+            .header("Referer", BASE_URL)
             .build()
 
         return try {
@@ -224,7 +243,10 @@ class DuckDuckGoScraper(
 
         val linkTags = LINK_TAG_REGEX.findAll(html).toList()
         val linkTexts = LINK_TEXT_REGEX.findAll(html).toList()
-        val snippets = SNIPPET_REGEX.findAll(html).toList()
+        val anchorSnippets = SNIPPET_ANCHOR_REGEX.findAll(html).map { it.groupValues[1] }.toList()
+        val snippets = anchorSnippets.ifEmpty {
+            SNIPPET_CELL_REGEX.findAll(html).map { it.groupValues[1] }.toList()
+        }
 
         for (i in linkTexts.indices) {
             if (results.size >= maxResults) break
@@ -232,7 +254,7 @@ class DuckDuckGoScraper(
             val linkTag = linkTags.getOrNull(i)?.value ?: continue
             val href = HREF_REGEX.find(linkTag)?.groupValues?.get(1) ?: continue
             val title = linkTexts[i].groupValues[1].stripHtml().trim()
-            val snippet = snippets.getOrNull(i)?.groupValues?.get(1)?.stripHtml()?.trim().orEmpty()
+            val snippet = snippets.getOrNull(i)?.stripHtml()?.trim().orEmpty()
 
             val url = extractUrl(href)
 
@@ -269,4 +291,5 @@ class DuckDuckGoScraper(
         .replace("&#x27;", "'")
         .replace("&#39;", "'")
         .replace("&nbsp;", " ")
+        .replace("&hellip;", "…")
 }

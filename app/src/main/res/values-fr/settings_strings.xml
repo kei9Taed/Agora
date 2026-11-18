@@ -220,6 +220,8 @@
     <string name="web_search_tavily">Tavily</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">DuckDuckGo via un assistant imitant un navigateur dans le bac à sable local (build F-Droid uniquement). Installe curl_cffi à la première utilisation.</string>
     <string name="web_search_brave_desc">API de recherche axée sur la confidentialité. Offre gratuite disponible.</string>
     <string name="web_search_serper_desc">API Google Search rapide. 2 500 requêtes gratuites par mois.</string>
     <string name="web_search_tavily_desc">API de recherche optimisée pour l\'IA. Conçue pour les agents LLM.</string>
