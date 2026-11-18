@@ -84,6 +84,7 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             "serper" -> stringResource(R.string.web_search_serper)
                                             "tavily" -> stringResource(R.string.web_search_tavily)
                                             "duckduckgo" -> stringResource(R.string.web_search_duckduckgo)
+                                            "duckduckgo_cffi" -> stringResource(R.string.web_search_duckduckgo_cffi)
                                             else -> stringResource(R.string.web_search_brave)
                                         }
                                     )
@@ -93,7 +94,8 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                             )
                         }
 
-                        if (webSearchProvider != "searxng" && webSearchProvider != "duckduckgo") {
+                        if (webSearchProvider != "searxng" && webSearchProvider != "duckduckgo" &&
+                            webSearchProvider != "duckduckgo_cffi") {
                             add {
                                 Column(
                                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 16.dp)
@@ -272,6 +274,7 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                 ) {
                     val providers = listOf(
                         "duckduckgo" to R.string.web_search_duckduckgo,
+                        "duckduckgo_cffi" to R.string.web_search_duckduckgo_cffi,
                         "brave" to R.string.web_search_brave,
                         "kagi" to R.string.web_search_kagi,
                         "serper" to R.string.web_search_serper,
@@ -291,6 +294,7 @@ fun SettingsWebSearchPage(viewModel: ChatViewModel, onBack: () -> Unit) {
                                             "tavily" -> R.string.web_search_tavily_desc
                                             "searxng" -> R.string.web_search_searxng_desc
                                             "duckduckgo" -> R.string.web_search_duckduckgo_desc
+                                            "duckduckgo_cffi" -> R.string.web_search_duckduckgo_cffi_desc
                                             else -> R.string.web_search_brave_desc
                                         }
                                     )

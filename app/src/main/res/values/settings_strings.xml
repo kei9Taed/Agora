@@ -225,12 +225,14 @@
     <string name="web_search_tavily">Tavily</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
     <string name="web_search_brave_desc">Privacy-focused search API. Free tier available.</string>
     <string name="web_search_kagi_desc">Premium search API with personalized results. Pay per use.</string>
     <string name="web_search_serper_desc">Fast Google Search API. 2,500 free queries/month.</string>
     <string name="web_search_tavily_desc">AI-optimized search API. Built for LLM agents.</string>
     <string name="web_search_searxng_desc">Self-hosted metasearch engine. Best used with your own instance.</string>
-    <string name="web_search_duckduckgo_desc">Free, no API key. Web scraping lite.duckduckgo.com. May be unstable and trigger anti-bot protection.</string>
+    <string name="web_search_duckduckgo_desc">Free, no API key. Scrapes html.duckduckgo.com with a browser User-Agent. May still hit rate limits.</string>
+    <string name="web_search_duckduckgo_cffi_desc">DuckDuckGo through a browser-impersonating helper in the Local Sandbox (F-Droid build only). Installs curl_cffi on first use.</string>
     <string name="web_search_select_provider">Select Search Provider</string>
     <string name="web_search_brave_key">Brave Search API Key</string>
     <string name="web_search_brave_key_hint">API key from brave.com/search/api/</string>
