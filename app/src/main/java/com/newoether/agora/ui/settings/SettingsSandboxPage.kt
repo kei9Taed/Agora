@@ -4,6 +4,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -15,14 +16,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import com.newoether.agora.ui.motion.MotionAwareCircularProgressIndicator as CircularProgressIndicator
+import com.newoether.agora.ui.motion.MotionAwareLinearProgressIndicator
 import com.newoether.agora.ui.motion.LocalAgoraMotionPolicy
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -30,10 +34,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
@@ -42,11 +49,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.newoether.agora.R
 import com.newoether.agora.sandbox.openSandboxRoot
+import com.newoether.agora.sandbox.SandboxDistribution
 import com.newoether.agora.sandbox.SandboxManager
 import com.newoether.agora.sandbox.SandboxSharedStorageAccess
 import com.newoether.agora.util.DebugLog
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -57,12 +64,12 @@ fun SettingsSandboxPage(
     showDocFab: Boolean = false,
     sharedStorageEnabled: Boolean = false,
     onSharedStorageEnabledChange: (Boolean) -> Unit = {},
-    onSnackbar: (String) -> Unit,
 ) {
     val motionPolicy = LocalAgoraMotionPolicy.current
     val scope = rememberCoroutineScope()
     val listState = rememberSettingsLazyListState()
     val ctx = androidx.compose.ui.platform.LocalContext.current
+    val installFailedMessage = stringResource(R.string.sandbox_install_failed)
     var sharedStorageAccessGranted by remember {
         mutableStateOf(SandboxSharedStorageAccess.isGranted(ctx))
     }
@@ -92,9 +99,10 @@ fun SettingsSandboxPage(
     var available by remember(distribution) { mutableStateOf(sandboxManager.isAvailableSync()) }
     var backendPackagesLoading by remember(distribution) { mutableStateOf(true) }
     var selectingDistribution by remember { mutableStateOf(false) }
-    var installRequests by remember(distribution) { mutableIntStateOf(0) }
+    var distributionError by remember(distribution) { mutableStateOf<String?>(null) }
     val selectionFailedMessage = stringResource(R.string.sandbox_distribution_switch_failed)
-    val showSnackbar by rememberUpdatedState(onSnackbar)
+    var attemptedInstall by remember(distribution) { mutableStateOf(false) }
+    var installError by remember(distribution) { mutableStateOf<String?>(null) }
     var installPkg by rememberSaveable(distribution.id) { mutableStateOf(sandboxManager.pendingPkgName) }
     var lastInstallResult by remember(distribution) { mutableStateOf<Boolean?>(null) }
     var deleteConfirm by remember(distribution) { mutableStateOf<String?>(null) }
@@ -109,11 +117,7 @@ fun SettingsSandboxPage(
     val canManage = !isBusy && !installingRootfs && !selectingDistribution
     val showTerminal = terminalOutput.isNotBlank()
 
-    fun clearPackageState() {
-        installPkg = ""
-        deleteConfirm = null
-        lastInstallResult = null
-    }
+    fun clearAllState() { installPkg = ""; installError = null; deleteConfirm = null; lastInstallResult = null }
 
     fun installPackage(name: String) {
         if (!canManage) return
@@ -126,19 +130,32 @@ fun SettingsSandboxPage(
         sandboxManager.upgradePackages()
     }
 
-    // Recheck on page entry, selection or an Install tap, even if the running state is too brief to draw.
-    // The backend emits install failures independently; this check only updates the dashboard.
-    LaunchedEffect(distribution, installRequests) {
+    LaunchedEffect(distribution) {
         try {
-            sandboxManager.isInstallingRootfs.first { !it }
             available = sandboxManager.isAvailable()
-            if (available && backendPackagesLoading) sandboxManager.refreshPackageList()
+            if (available) sandboxManager.refreshPackageList()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            DebugLog.w("SettingsSandboxPage", "Failed to refresh sandbox environment", e)
+            installError = e.message
         } finally {
             backendPackagesLoading = false
+        }
+    }
+
+    // Confirm the selected environment after its user-initiated installation settles.
+    LaunchedEffect(installingRootfs, distribution) {
+        if (!installingRootfs && attemptedInstall) {
+            attemptedInstall = false
+            try {
+                available = sandboxManager.isAvailable()
+                if (available) { installError = null; sandboxManager.refreshPackageList() }
+                else installError = sandboxManager.lastError ?: installFailedMessage
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                installError = e.message
+            }
         }
     }
 
@@ -161,66 +178,131 @@ fun SettingsSandboxPage(
     ) {
             // ═══ Dashboard ═══
                 item {
-                    SettingsGroup(
-                        title = stringResource(R.string.sandbox_env),
-                        items = if (available) listOf({
+                    SettingsGroup(title = stringResource(R.string.sandbox_env), items = listOf({
+                        SettingsSandboxDistributionItem(
+                            distribution = distribution,
+                            enabled = canManage,
+                            error = distributionError,
+                            onSelect = { selected ->
+                                selectingDistribution = true
+                                distributionError = null
+                                scope.launch {
+                                    try {
+                                        if (sandboxManager.selectDistribution(selected)) {
+                                            clearAllState()
+                                            resetConfirm = false
+                                        } else {
+                                            distributionError = sandboxManager.lastError ?: selectionFailedMessage
+                                        }
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (e: Exception) {
+                                        distributionError = e.message ?: selectionFailedMessage
+                                    } finally {
+                                        selectingDistribution = false
+                                    }
+                                }
+                            },
+                        )
+                    }, {
+                        if (!available) {
+                            // Not installed
                             SettingsItem(
-                                headlineContent = { Text("${distribution.displayName} ${distribution.versionLabel}") },
+                                headlineContent = {
+                                    Text(
+                                        "${distribution.displayName} ${distribution.versionLabel}",
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
+                                supportingContent = {
+                                    Column {
+                                        Text(stringResource(R.string.sandbox_not_installed), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        if (installingRootfs) {
+                                            Spacer(Modifier.height(8.dp))
+                                            val p = downloadProgress
+                                            if (p != null) {
+                                                LinearProgressIndicator(progress = { p }, modifier = Modifier.fillMaxWidth().height(4.dp))
+                                            } else {
+                                                MotionAwareLinearProgressIndicator(
+                                                    modifier = Modifier.fillMaxWidth().height(4.dp),
+                                                )
+                                            }
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                if (p != null) stringResource(R.string.sandbox_downloading_rootfs, (p * 100).toInt())
+                                                else stringResource(R.string.sandbox_extracting_rootfs),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        installError?.let { err ->
+                                            Spacer(Modifier.height(8.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(8.dp),
+                                                color = MaterialTheme.colorScheme.errorContainer
+                                            ) {
+                                                Text(
+                                                    err,
+                                                    modifier = Modifier.padding(12.dp),
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onErrorContainer
+                                                )
+                                            }
+                                        }
+                                    }
+                                },
+                                leadingContent = {
+                                    SandboxDistributionIcon(distribution)
+                                },
+                                trailingContent = {
+                                    if (canManage) {
+                                        TextButton(onClick = {
+                                            clearAllState()
+                                            attemptedInstall = true
+                                            sandboxManager.installRootfs()
+                                        }) { Text(stringResource(R.string.sandbox_install), style = MaterialTheme.typography.labelMedium) }
+                                    }
+                                }
+                            )
+                        } else {
+                            // Ready dashboard
+                            SettingsItem(
+                                headlineContent = {
+                                    Text(
+                                        "${distribution.displayName} ${distribution.versionLabel}",
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                },
                                 supportingContent = {
                                     Column {
                                         Text(
                                             if (diskUsageMB < 1024) stringResource(R.string.sandbox_disk_usage_mb, diskUsageMB)
                                             else stringResource(R.string.sandbox_disk_usage_gb, diskUsageMB / 1024f),
                                             style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                         Spacer(Modifier.height(2.dp))
                                         Text(
                                             stringResource(R.string.sandbox_dashboard_summary, pkgCount),
                                             style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
                                 },
-                                leadingContent = { SandboxDistributionIcon(distribution) },
+                                leadingContent = {
+                                    SandboxDistributionIcon(distribution)
+                                },
                                 trailingContent = {
-                                    TextButton(onClick = ::upgradePackages, enabled = canManage) {
+                                    TextButton(
+                                        onClick = { upgradePackages() },
+                                        enabled = canManage
+                                    ) {
                                         Text(stringResource(R.string.sandbox_upgrade), style = MaterialTheme.typography.labelMedium)
                                     }
-                                },
-                            )
-                        }) else listOf({
-                            SettingsSandboxDistributionItem(distribution, enabled = canManage) { selected ->
-                                selectingDistribution = true
-                                scope.launch {
-                                    try {
-                                        if (sandboxManager.selectDistribution(selected)) {
-                                            clearPackageState()
-                                            resetConfirm = false
-                                        } else {
-                                            showSnackbar(sandboxManager.lastError?.takeIf(String::isNotBlank) ?: selectionFailedMessage)
-                                        }
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        showSnackbar(e.message?.takeIf(String::isNotBlank) ?: selectionFailedMessage)
-                                    } finally {
-                                        selectingDistribution = false
-                                    }
                                 }
-                            }
-                        }, {
-                            SettingsSandboxInstallItem(
-                                distribution = distribution,
-                                enabled = canManage,
-                                installing = installingRootfs,
-                                downloadProgress = downloadProgress,
-                                onInstall = {
-                                    clearPackageState()
-                                    sandboxManager.installRootfs()
-                                    installRequests++
-                                },
                             )
-                        }),
-                    )
+                        }
+                    }))
                 }
 
                 if (available) {
@@ -639,7 +721,7 @@ fun SettingsSandboxPage(
                         scope.launch {
                             if (sandboxManager.reset()) {
                                 available = false
-                                clearPackageState()
+                                clearAllState()
                             }
                         }
                     },

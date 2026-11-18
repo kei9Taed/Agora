@@ -2,6 +2,7 @@ package com.newoether.agora.api
 
 import android.util.Base64
 import com.newoether.agora.sandbox.SandboxManager
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -36,7 +37,10 @@ internal class CffiSearchBridge(private val sandbox: SandboxManager) {
             )
         }
 
-        val writeFailure = runCatching { sandbox.fileWrite(SCRIPT_PATH, SCRIPT, "") }.getOrNull()
+        val writeFailure = runCatching {
+            sandbox.fileWrite(SCRIPT_PATH, SCRIPT, "")
+                ?: sandbox.fileWrite(BOOTSTRAP_PATH, BOOTSTRAP, "")
+        }.getOrNull()
         if (writeFailure != null) {
             return DuckDuckGoScraper.SearchResponse.Error(
                 DuckDuckGoScraper.SearchErrorType.NETWORK_ERROR,
@@ -48,10 +52,10 @@ internal class CffiSearchBridge(private val sandbox: SandboxManager) {
             sandbox.executeCommand(DEPENDENCY_PROBE, "", PROBE_TIMEOUT_MS)
         }.getOrNull()
         if (probe == null || probe.exitCode != 0) {
-            // Installing takes longer than any single tool round should block, so hand it to
-            // the sandbox job runner and let the next call succeed.
+            // Bootstrapping needs an index update plus a wheel download — longer than one tool
+            // round should block, so hand it to the sandbox job runner and let the next call win.
             runCatching {
-                sandbox.startJob(INSTALL_COMMAND, "", INSTALL_TIMEOUT_MS, "Install curl_cffi")
+                sandbox.startJob("sh $BOOTSTRAP_PATH", "", INSTALL_TIMEOUT_MS, "Install curl_cffi")
             }
             return DuckDuckGoScraper.SearchResponse.Error(
                 DuckDuckGoScraper.SearchErrorType.NETWORK_ERROR,
@@ -61,12 +65,11 @@ internal class CffiSearchBridge(private val sandbox: SandboxManager) {
 
         val encodedQuery = Base64.encodeToString(query.toByteArray(Charsets.UTF_8), Base64.NO_WRAP)
         val command = "python3 $SCRIPT_PATH $encodedQuery ${maxResults.coerceIn(1, 10)}"
-        val result = runCatching {
-            sandbox.executeCommand(command, "", SEARCH_TIMEOUT_MS)
-        }.getOrNull() ?: return DuckDuckGoScraper.SearchResponse.Error(
-            DuckDuckGoScraper.SearchErrorType.NETWORK_ERROR,
-            "The curl_cffi search bridge did not run.",
-        )
+        val result = runBridgeWithRetry(command)
+            ?: return DuckDuckGoScraper.SearchResponse.Error(
+                DuckDuckGoScraper.SearchErrorType.NETWORK_ERROR,
+                "The curl_cffi search bridge did not run.",
+            )
 
         val payload = result.stdout.lineSequence()
             .map { it.trim() }
@@ -79,6 +82,18 @@ internal class CffiSearchBridge(private val sandbox: SandboxManager) {
             )
 
         return parsePayload(payload)
+    }
+
+    private suspend fun runBridgeWithRetry(command: String): SandboxManager.SandboxResult? {
+        repeat(MAX_ATTEMPTS) { attempt ->
+            val result = runCatching {
+                sandbox.executeCommand(command, "", SEARCH_TIMEOUT_MS)
+            }.getOrNull() ?: return null
+            val transient = TRANSIENT_FAILURES.any { result.stdout.contains(it) }
+            if (!transient || attempt == MAX_ATTEMPTS - 1) return result
+            delay(RETRY_DELAY_MS)
+        }
+        return null
     }
 
     private fun parsePayload(payload: String): DuckDuckGoScraper.SearchResponse {
@@ -124,15 +139,45 @@ internal class CffiSearchBridge(private val sandbox: SandboxManager) {
 
     private companion object {
         const val SCRIPT_PATH = "/home/agora/.agora/search_bridge.py"
+        const val BOOTSTRAP_PATH = "/home/agora/.agora/bootstrap_search.sh"
         const val PROBE_TIMEOUT_MS = 20_000
         const val SEARCH_TIMEOUT_MS = 45_000
         const val INSTALL_TIMEOUT_MS = 600_000
+        const val RETRY_DELAY_MS = 1_500L
+        const val MAX_ATTEMPTS = 2
+
+        /**
+         * Handshake resets happen on flaky mobile networks and right after the first
+         * `curl_cffi` import; one retry turns those into a slower answer instead of a failure.
+         */
+        val TRANSIENT_FAILURES = listOf("SSL_connect", "Connection closed abruptly", "BoringSSL")
         const val DEPENDENCY_PROBE = "python3 -c 'import curl_cffi'"
 
-        /** `--break-system-packages` is required on PEP 668 distros (Debian 12+, Ubuntu 24.04). */
-        const val INSTALL_COMMAND =
-            "python3 -m pip install --quiet --disable-pip-version-check " +
-                "--break-system-packages curl_cffi 2>&1 | tail -5"
+        /**
+         * Installs `curl_cffi` into the sandbox userland, surviving a freshly installed rootfs.
+         *
+         * Alpine ships `py3-pip` in `community`, but the rootfs is created with `main` only, so
+         * a plain `pip install` fails with "no such package: py3-pip". The community line is
+         * appended here as well, because existing installations never get the installer fix.
+         */
+        val BOOTSTRAP = """
+            set -u
+            if python3 -m pip --version >/dev/null 2>&1; then
+              python3 -m pip install --quiet --disable-pip-version-check \
+                --break-system-packages curl_cffi && exit 0
+            fi
+            if command -v apk >/dev/null 2>&1; then
+              ver=${'$'}(cut -d. -f1,2 /etc/alpine-release 2>/dev/null || echo 3.21)
+              repo="/v${'$'}{ver}/community"
+              grep -q "${'$'}repo" /etc/apk/repositories 2>/dev/null || \
+                echo "https://dl-cdn.alpinelinux.org/alpine${'$'}repo" >> /etc/apk/repositories
+              apk update >/dev/null 2>&1 || true
+              apk add --no-cache py3-pip >/dev/null 2>&1 || true
+            fi
+            python3 -m pip --version >/dev/null 2>&1 || python3 -m ensurepip --upgrade >/dev/null 2>&1 || true
+            python3 -m pip install --quiet --disable-pip-version-check \
+              --break-system-packages curl_cffi
+        """.trimIndent()
 
         val SCRIPT = """
             import base64

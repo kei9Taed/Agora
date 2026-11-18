@@ -123,7 +123,16 @@ internal class ProotRootfsInstaller(
             configureApt(rootfs)
         } else {
             listOf("var/cache/apk", "etc/apk/cache").forEach { directory(rootfs, it) }
-            writeFile(rootfs, "etc/apk/repositories", "https://dl-cdn.alpinelinux.org/alpine/v3.21/main\n")
+            // `py3-pip`, `nodejs` and friends live in `community`; a `main`-only rootfs makes
+            // them uninstallable ("no such package: py3-pip") even though the sandbox UI offers
+            // them as quick packages.
+            val alpineVersion = distribution.versionLabel.substringBefore(' ')
+            writeFile(
+                rootfs,
+                "etc/apk/repositories",
+                "https://dl-cdn.alpinelinux.org/alpine/v$alpineVersion/main\n" +
+                    "https://dl-cdn.alpinelinux.org/alpine/v$alpineVersion/community\n",
+            )
             AlpinePackageMetadataStore(rootfs).apply {
                 captureBaseWorld(force = true)
                 writeExplicitPackages(emptySet())

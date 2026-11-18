@@ -10,34 +10,12 @@ import com.newoether.agora.model.ImageArtifact
 import com.newoether.agora.model.MessageSegment
 import com.newoether.agora.model.Participant
 import com.newoether.agora.model.ToolCallData
-import com.newoether.agora.phone.PHONE_MAX_SCREENSHOTS_UNLIMITED
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhoneToolImageProjectionTest {
-    @Test
-    fun `Unlimited keeps all eligible images while shared projection still deduplicates`() {
-        val images = (1..25).map { image("unlimited-$it") }
-        val unavailable = image("unavailable").copy(unavailable = true)
-        val otherTool = image("ordinary-tool")
-        val older = round("unlimited-old", listOf(call("older", images.take(10))))
-        val newer = round("unlimited-new", listOf(
-            call("newer", images.drop(10) + listOf(images.last(), unavailable), "phone_tap"),
-            call("other", listOf(otherTool), "file_view_image"),
-        ))
-        val live = older.pathMessages + newer.pathMessages
-        val replay = projectProviderMessages(older.entities + newer.entities, includeStoredTranscriptions = false)
-        listOf(live, replay).forEach { messages ->
-            val projected = projectPhoneToolImages(messages, PHONE_MAX_SCREENSHOTS_UNLIMITED)
-            assertSame(messages, projected)
-            assertEquals((images + otherTool).map { it.path }, contextImages(projected))
-            assertTrue(projectToolResultImagesToUserMessage(projected, false)
-                .filter { it.id.startsWith("image_context_") }.all { it.images.isEmpty() })
-        }
-    }
-
     @Test
     fun `live builder and Room replay count image occurrences once across all mirrors`() {
         val first = image("first")
@@ -104,7 +82,7 @@ class PhoneToolImageProjectionTest {
     }
 
     @Test
-    fun `minimum retains one built in Phone image without counting or removing other images`() {
+    fun `zero drops only exact built in Phone tools and preserves same path other images`() {
         val phone = image("shared", width = 100)
         val other = phone.copy(width = 200)
         val names = listOf("mcp_call_tool", "mcp_phone_screenshot_ab1234", "phone_screenshot_extra",
@@ -114,50 +92,48 @@ class PhoneToolImageProjectionTest {
             images = listOf(phone.path), imageArtifacts = mapOf(phone.path to phone),
         )
         val generated = ordinary.copy(id = "assistant", participant = Participant.MODEL)
-        val latest = image("latest-phone")
-        val calls = listOf(call("phone", listOf(phone)), call("latest", listOf(latest), "phone_tap")) +
-            names.mapIndexed { index, name -> call("other-$index", listOf(other), name) }
+        val calls = listOf(call("phone", listOf(phone))) + names.mapIndexed { index, name ->
+            call("other-$index", listOf(other), name)
+        }
         val messages = listOf(ordinary, generated) + round("mixed", calls).pathMessages
-        val projected = projectPhoneToolImages(messages, 1)
+        val projected = projectPhoneToolImages(messages, 0)
 
         assertSame(ordinary, projected[0])
         assertSame(generated, projected[1])
         assertEquals(emptyList<String>(), projected[3].images)
-        assertEquals(listOf(latest.path), projected[4].images)
-        names.indices.forEach { index ->
-            assertSame(messages[index + 5], projected[index + 5])
+        calls.drop(1).indices.forEach { index ->
+            assertSame(messages[index + 4], projected[index + 4])
         }
         val context = projectToolResultImagesToUserMessage(projected, true)
             .single { it.id.startsWith("image_context_") }
-        assertEquals(listOf(latest, other), context.projectedImageOccurrences().map { it.artifact })
+        assertEquals(listOf(other), context.projectedImageOccurrences().map { it.artifact })
         val withGenerated = projectAssistantImagesToLatestUserMessage(projected, true)
         assertTrue(withGenerated.first().images.contains(phone.path))
-        assertSame(messages, projectPhoneToolImages(messages, 16))
+        assertEquals(messages, projectPhoneToolImages(messages, Int.MAX_VALUE))
     }
 
     @Test
     fun `same path slots in one mixed result keep independent descriptors and budget`() {
         val phone = image("same", width = 100)
         val other = phone.copy(width = 900)
-        val latest = image("same-result-newest")
-        val phoneCall = call("phone", listOf(phone, latest))
+        val phoneCall = call("phone", listOf(phone))
         val result = ChatMessage(
             id = "result_shared", text = "mixed", participant = Participant.USER,
-            images = listOf(phone.path, latest.path, other.path),
+            images = listOf(phone.path, other.path),
             segments = listOf(segment(phoneCall), segment(call("other", listOf(other), "file_view_image"))),
             toolCall = phoneCall,
-            imageArtifacts = mapOf(phone.path to phone, latest.path to latest),
+            imageArtifacts = mapOf(phone.path to phone),
         )
-        val projected = projectPhoneToolImages(listOf(result), 1).single()
+        val projected = projectPhoneToolImages(listOf(result), 0).single()
 
-        assertEquals(listOf(latest.path, other.path), projected.images)
-        assertEquals(listOf(latest, other), projected.projectedImageOccurrences().map { it.artifact })
-        assertEquals(listOf(latest), projected.toolCall!!.resultImages)
-        assertEquals(listOf(latest), projected.segments!![0].toolImages)
+        assertEquals(listOf(other.path), projected.images)
+        assertEquals(listOf(other), projected.projectedImageOccurrences().map { it.artifact })
+        assertEquals(emptyList<ImageArtifact>(), projected.toolCall!!.resultImages)
+        assertEquals(emptyList<ImageArtifact>(), projected.segments!![0].toolImages)
         assertEquals(result.segments!![1], projected.segments!![1])
-        assertEquals(listOf(latest, other), projectToolResultImagesToUserMessage(listOf(projected), true)
+        assertEquals(listOf(other), projectToolResultImagesToUserMessage(listOf(projected), true)
             .last().projectedImageOccurrences().map { it.artifact })
-        assertEquals(listOf(phone, latest, other), result.projectedImageOccurrences().map { it.artifact })
+        assertEquals(listOf(phone, other), result.projectedImageOccurrences().map { it.artifact })
     }
 
     @Test
@@ -180,9 +156,11 @@ class PhoneToolImageProjectionTest {
         assertEquals(listOf(pictures.last()), projected.first().toolCall!!.resultImages)
         assertEquals(listOf(pictures.last().path), projected.last().images)
         assertEquals(listOf(pictures.last().path), contextImages(projected))
-        assertTrue(projected.none { pictures.first().path in it.imageArtifacts })
-        assertEquals(projected, projectPhoneToolImages(messages, 0))
-        assertEquals(projected, projectPhoneToolImages(messages, Int.MIN_VALUE))
+        val zero = projectPhoneToolImages(messages, 0)
+        assertTrue(zero.all { it.images.isEmpty() && it.toolCall!!.resultImages.isEmpty() })
+        assertTrue(zero.all { it.imageArtifacts.isEmpty() })
+        assertTrue(contextImages(zero).isEmpty())
+        assertEquals(zero, projectPhoneToolImages(messages, -1))
         assertEquals(pictures.map { it.path }, result.images)
     }
 
@@ -249,41 +227,19 @@ class PhoneToolImageProjectionTest {
         val calls = com.newoether.agora.phone.PHONE_TOOL_NAMES.mapIndexed { index, name ->
             call("phone-$index", listOf(image("phone-$index")), name)
         }
-        val earlier = round("all-phone", calls).pathMessages
-        val latest = image("latest")
-        val messages = earlier + round("latest", listOf(call("latest", listOf(latest)))).pathMessages
-        val projected = projectPhoneToolImages(messages, 1)
+        val projected = projectPhoneToolImages(round("all-phone", calls).pathMessages, 0)
 
-        assertTrue(projected.take(earlier.size).all { it.images.isEmpty() })
-        assertTrue(projected.take(earlier.size).all { message ->
-            message.segments.orEmpty().all { it.toolImages.isEmpty() }
-        })
-        assertTrue(projected.take(earlier.size).all { it.toolCall!!.resultImages.isEmpty() })
-        assertEquals(listOf(latest.path), contextImages(projected))
-    }
-
-    @Test
-    fun `maximum keeps only the latest sixteen Phone images across tool rounds`() {
-        val images = (1..21).map { image("ceiling-$it") }
-        val older = round("ceiling-old", listOf(call("older", images.take(10)))).pathMessages
-        val newer = round("ceiling-new", listOf(call("newer", images.drop(10)))).pathMessages
-        val messages = older + newer
-        val projected = projectPhoneToolImages(messages, 16)
-
-        assertEquals(images.takeLast(16).map { it.path }, contextImages(projected))
-        assertEquals(images.subList(5, 10), projected[1].toolCall!!.resultImages)
-        assertSame(newer[1], projected.last())
-        assertEquals(projected, projectPhoneToolImages(messages, 20))
-        assertEquals(projected, projectPhoneToolImages(messages, Int.MAX_VALUE))
-        assertEquals(images.take(10), older[1].toolCall!!.resultImages)
+        assertTrue(projected.all { it.images.isEmpty() })
+        assertTrue(projected.all { message -> message.segments.orEmpty().all { it.toolImages.isEmpty() } })
+        assertTrue(projected.all { it.toolCall!!.resultImages.isEmpty() })
     }
 
     @Test
     fun `unrelated messages and an empty history preserve their original objects`() {
         val messages = listOf(ChatMessage(id = "user", text = "hello", participant = Participant.USER))
-        assertSame(messages, projectPhoneToolImages(messages, 1))
+        assertSame(messages, projectPhoneToolImages(messages, 0))
         val empty = emptyList<ChatMessage>()
-        assertSame(empty, projectPhoneToolImages(empty, 1))
+        assertSame(empty, projectPhoneToolImages(empty, 0))
     }
 
     private fun contextImages(messages: List<ChatMessage>): List<String> =

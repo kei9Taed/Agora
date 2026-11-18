@@ -205,6 +205,8 @@
     <string name="web_search_tavily">Tavily</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">透過本機沙盒中模擬瀏覽器的輔助程式存取 DuckDuckGo（僅 F-Droid 版本）。首次使用時會安裝 curl_cffi。</string>
     <string name="web_search_brave_desc">注重隱私的搜尋 API。提供免費方案。</string>
     <string name="web_search_kagi_desc">支援個人化結果的進階搜尋 API，按量付費。</string>
     <string name="web_search_serper_desc">快速 Google 搜尋 API。每月 2,500 次免費查詢。</string>

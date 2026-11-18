@@ -46,14 +46,18 @@ class ProotRootfsInstallerTest {
     }
 
     @Test
-    fun alpineConfigurationKeepsExistingRepositoryAndDoesNotAddAptPolicy() {
+    fun alpineConfigurationInstallsMainAndCommunityRepositories() {
         val rootfs = rootfs("alpine")
         file(rootfs, "etc/apk/world", "alpine-baselayout\napk-tools\nbusybox\n")
         file(rootfs, "lib/apk/db/installed", "P:alpine-baselayout\nV:3.6.8-r0\n\nP:apk-tools\nV:2.14.6-r2\n\nP:busybox\nV:1.37.0-r8\n\n")
 
         ProotRootfsInstaller().configureRootfs(SandboxDistribution.ALPINE, rootfs)
 
-        assertEquals("https://dl-cdn.alpinelinux.org/alpine/v3.21/main\n", File(rootfs, "etc/apk/repositories").readText())
+        assertEquals(
+            "https://dl-cdn.alpinelinux.org/alpine/v3.21/main\n" +
+                "https://dl-cdn.alpinelinux.org/alpine/v3.21/community\n",
+            File(rootfs, "etc/apk/repositories").readText(),
+        )
         assertEquals("alpine-baselayout\napk-tools\nbusybox\n", File(rootfs, "etc/agora/base-world").readText())
         assertEquals("", File(rootfs, "etc/agora/explicit-packages").readText())
         assertTrue(File(rootfs, "var/cache/apk").isDirectory)

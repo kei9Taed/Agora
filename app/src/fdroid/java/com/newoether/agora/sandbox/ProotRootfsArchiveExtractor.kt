@@ -5,7 +5,6 @@ import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.Paths
-import java.nio.file.StandardCopyOption.COPY_ATTRIBUTES
 import kotlinx.coroutines.CancellationException
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 
@@ -105,9 +104,7 @@ internal fun extractTarEntries(
             if (!Files.isRegularFile(source.toPath(), NOFOLLOW_LINKS)) continue
             val outFile = outputFile(path)
             removeNonDirectory(outFile)
-            // Android's app SELinux policy denies link(2), even inside app-private storage.
-            // Keep these tar aliases usable as separate files with the same content and mode.
-            Files.copy(source.toPath(), outFile.toPath(), COPY_ATTRIBUTES)
+            Files.createLink(outFile.toPath(), source.toPath())
             iterator.remove()
             progress = true
         }
