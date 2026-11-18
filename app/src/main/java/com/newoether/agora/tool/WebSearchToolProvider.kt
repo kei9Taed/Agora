@@ -127,17 +127,37 @@ internal fun webSearchErrorCode(resultJson: String): String? = runCatching {
 }.getOrNull()
 
 /** Attaches provenance so the model can tell a degraded answer from a clean one. */
-private fun annotateSearchResult(resultJson: String, provider: String, tried: List<String>): String =
+private fun annotateSearchResult(
+    resultJson: String,
+    provider: String,
+    attempts: List<JsonObject>,
+): String =
     runCatching {
         val obj = Json.parseToJsonElement(resultJson).jsonObject
         buildJsonObject {
             obj.forEach { (key, value) -> put(key, value) }
             put("provider", provider)
-            if (tried.size > 1) put("fallback_attempts", buildJsonArray {
-                tried.forEach { add(JsonPrimitive(it)) }
-            })
+            if (attempts.isNotEmpty()) put("attempts", JsonArray(attempts))
         }.toString()
     }.getOrDefault(resultJson)
+
+/**
+ * One failed provider, as reported back to the model.
+ *
+ * Without this the caller only sees the *last* error, which hides the real cause: a dead
+ * `curl_cffi` bridge followed by an unreachable SearXNG instance looks exactly like "searxng
+ * is broken", even though the primary provider failed first.
+ */
+internal fun webSearchFailureAttempt(provider: String, resultJson: String): JsonObject {
+    val obj = runCatching { Json.parseToJsonElement(resultJson).jsonObject }.getOrNull()
+    return buildJsonObject {
+        put("provider", provider)
+        put("error", (obj?.get("error") as? JsonPrimitive)?.content ?: "unknown")
+        (obj?.get("message") as? JsonPrimitive)?.content
+            ?.takeIf { it.isNotBlank() }
+            ?.let { put("message", it) }
+    }
+}
 
 internal fun webSearchProviderDisplayName(provider: String): String = when (provider) {
     "kagi" -> "Kagi"
@@ -223,18 +243,20 @@ class WebSearchToolProvider(
             cffiAvailable = cffiAvailable,
         )
 
-        val tried = mutableListOf<String>()
+        val attempts = mutableListOf<JsonObject>()
         var lastResult = ""
+        var lastProvider = primary
         for (provider in order) {
             val result = searchWithProvider(provider, query, numResults, ctx)
-            tried.add(provider)
+            lastProvider = provider
             lastResult = result
             if (webSearchErrorCode(result) == null) {
-                return annotateSearchResult(result, provider, tried)
+                return annotateSearchResult(result, provider, attempts)
             }
+            attempts.add(webSearchFailureAttempt(provider, result))
         }
 
-        return annotateSearchResult(lastResult, tried.lastOrNull() ?: primary, tried)
+        return annotateSearchResult(lastResult, lastProvider, attempts)
     }
 
     /** Runs one provider and returns its normalized JSON payload (success or error). */

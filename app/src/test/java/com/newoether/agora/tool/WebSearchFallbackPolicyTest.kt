@@ -86,4 +86,23 @@ class WebSearchFallbackPolicyTest {
     fun displayName_coversCffiBridge() {
         assertEquals("DuckDuckGo (curl_cffi)", webSearchProviderDisplayName("duckduckgo_cffi"))
     }
+
+    @Test
+    fun failureAttempt_recordsProviderErrorAndMessage() {
+        val attempt = webSearchFailureAttempt(
+            "duckduckgo_cffi",
+            """{"type":"web_search","error":"network_error","message":"curl_cffi is being installed"}""",
+        )
+        assertEquals("duckduckgo_cffi", attempt["provider"]?.toString()?.trim('"'))
+        assertEquals("network_error", attempt["error"]?.toString()?.trim('"'))
+        assertEquals("curl_cffi is being installed", attempt["message"]?.toString()?.trim('"'))
+    }
+
+    @Test
+    fun failureAttempt_survivesNonJsonPayload() {
+        val attempt = webSearchFailureAttempt("searxng", "connection closed")
+        assertEquals("searxng", attempt["provider"]?.toString()?.trim('"'))
+        assertEquals("unknown", attempt["error"]?.toString()?.trim('"'))
+        assertNull(attempt["message"])
+    }
 }
