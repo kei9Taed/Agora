@@ -221,6 +221,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">ローカルサンドボックス内でブラウザを偽装するヘルパー経由の DuckDuckGo（F-Droid ビルドのみ）。初回使用時に curl_cffi をインストールします。</string>
     <string name="web_search_brave_desc">プライバシー重視の検索 API。無料枠あり。</string>
     <string name="web_search_serper_desc">高速な Google 検索 API。月 2,500 回まで無料。</string>
     <string name="web_search_tavily_desc">AI 最適化された検索 API。LLM エージェント向けに構築。</string>

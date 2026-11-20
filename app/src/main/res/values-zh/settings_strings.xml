@@ -218,6 +218,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">通过本地沙盒中模拟浏览器的助手访问 DuckDuckGo（仅 F-Droid 版本）。首次使用时会安装 curl_cffi。</string>
     <string name="web_search_brave_desc">注重隐私的搜索 API。提供免费套餐。</string>
     <string name="web_search_kagi_desc">支持个性化结果的高级搜索 API，按量付费。</string>
     <string name="web_search_serper_desc">快速 Google 搜索 API。每月 2,500 次免费查询。</string>

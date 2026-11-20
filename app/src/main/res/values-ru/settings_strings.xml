@@ -221,6 +221,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">DuckDuckGo через помощник, имитирующий браузер, в локальной песочнице (только сборка F-Droid). При первом использовании устанавливает curl_cffi.</string>
     <string name="web_search_brave_desc">API поиска с упором на конфиденциальность. Доступен бесплатный тариф.</string>
     <string name="web_search_serper_desc">Быстрый API Google Search. 2 500 бесплатных запросов в месяц.</string>
     <string name="web_search_tavily_desc">API поиска, оптимизированный для ИИ. Создан для LLM-агентов.</string>

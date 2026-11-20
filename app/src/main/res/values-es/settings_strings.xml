@@ -221,6 +221,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">DuckDuckGo mediante un asistente que imita al navegador en el Sandbox local (solo compilación F-Droid). Instala curl_cffi en el primer uso.</string>
     <string name="web_search_brave_desc">API de búsqueda centrada en la privacidad. Nivel gratuito disponible.</string>
     <string name="web_search_serper_desc">API rápida de Google Search. 2.500 consultas gratis al mes.</string>
     <string name="web_search_tavily_desc">API de búsqueda optimizada para IA. Creada para agentes LLM.</string>
