@@ -212,6 +212,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">DuckDuckGo qua trợ lý giả lập trình duyệt trong Sandbox cục bộ (chỉ bản F-Droid). Cài curl_cffi ở lần dùng đầu tiên.</string>
     <string name="web_search_brave_desc">API tìm kiếm tập trung vào quyền riêng tư. Có gói miễn phí.</string>
     <string name="web_search_serper_desc">API tìm kiếm Google nhanh. 2,500 truy vấn miễn phí/tháng.</string>
     <string name="web_search_tavily_desc">API tìm kiếm tối ưu hóa cho AI. Được xây dựng cho các tác nhân LLM.</string>

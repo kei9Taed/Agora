@@ -221,6 +221,8 @@
     <string name="web_search_exa">Exa</string>
     <string name="web_search_searxng">SearXNG</string>
     <string name="web_search_duckduckgo">DuckDuckGo</string>
+    <string name="web_search_duckduckgo_cffi">DuckDuckGo (curl_cffi)</string>
+    <string name="web_search_duckduckgo_cffi_desc">로컬 샌드박스에서 브라우저를 가장하는 도우미를 통한 DuckDuckGo(F-Droid 빌드 전용). 첫 사용 시 curl_cffi를 설치합니다.</string>
     <string name="web_search_brave_desc">개인정보 보호 중심 검색 API. 무료 등급 제공.</string>
     <string name="web_search_serper_desc">빠른 Google 검색 API. 월 2,500회 무료 쿼리.</string>
     <string name="web_search_tavily_desc">AI에 최적화된 검색 API. LLM 에이전트용으로 제작.</string>
