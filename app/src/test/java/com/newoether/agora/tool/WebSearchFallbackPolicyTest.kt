@@ -108,9 +108,9 @@ class WebSearchFallbackPolicyTest {
     @Test
     fun attemptsAreAttachedOnlyWhenSomethingFailed() {
         val payload = """{"type":"web_search","results":[]}"""
-        assertEquals(payload, withSearchAttempts(payload, emptyList()))
+        assertEquals(payload, annotateSearchAttempts(payload, emptyList()))
 
-        val annotated = withSearchAttempts(
+        val annotated = annotateSearchAttempts(
             payload,
             listOf(webSearchFailureAttempt("duckduckgo", """{"error":"captcha"}""")),
         )
