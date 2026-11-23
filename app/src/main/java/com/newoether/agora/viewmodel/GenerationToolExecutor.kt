@@ -110,7 +110,7 @@ internal class GenerationToolExecutor private constructor(
                     com.newoether.agora.tool.TodoToolProvider(conversations),
                     MemoryToolProvider(memoryManager),
                     SkillToolProvider(skillManager),
-                    WebSearchToolProvider(),
+                    WebSearchToolProvider(sandboxFactory = sandboxFactory),
                     RagToolProvider(conversations, generatingConversationIds),
                     imageGenProvider,
                     shellProvider,

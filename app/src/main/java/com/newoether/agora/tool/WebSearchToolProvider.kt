@@ -1,12 +1,15 @@
 package com.newoether.agora.tool
 
 import androidx.core.text.HtmlCompat
+import com.newoether.agora.api.CffiSearchBridge
 import com.newoether.agora.api.DuckDuckGoScraper
 import com.newoether.agora.api.HttpClient
 import com.newoether.agora.api.ToolDefinition
 import com.newoether.agora.api.ToolFunction
 import com.newoether.agora.api.ToolParameters
 import com.newoether.agora.api.ToolProperty
+import com.newoether.agora.sandbox.SandboxManager
+import com.newoether.agora.sandbox.SandboxManagerFactory
 import com.newoether.agora.util.Constants
 import com.newoether.agora.data.normalizeWebSearchProvider
 import com.newoether.agora.viewmodel.GenerationContext
@@ -439,17 +442,94 @@ internal fun webSearchProviderDisplayName(provider: String): String = when (prov
     "exa" -> "Exa"
     "searxng" -> "SearXNG"
     "duckduckgo" -> "DuckDuckGo"
+    "duckduckgo_cffi" -> "DuckDuckGo (curl_cffi)"
     else -> "Brave Search"
 }
 
 /** The configured Max Results value is the per-call ceiling the model cannot exceed. */
 internal fun webSearchResultLimit(configured: Int): Int = configured.coerceIn(1, 10)
 
-class WebSearchToolProvider : ToolProvider {
+/**
+ * Providers that may be tried after the primary one fails.
+ *
+ * Keyless/local backends come first (no billing surprise), then keyed providers the user has
+ * already configured. `duckduckgo_cffi` is only offered when the on-device sandbox can run it.
+ */
+internal val WEB_SEARCH_FALLBACK_ORDER = listOf("searxng", "brave", "serper", "tavily", "exa", "kagi")
+
+/**
+ * Full attempt order for one `web_search` call.
+ *
+ * Pure function so the policy stays unit-testable: the executor, not the model, decides whether
+ * a failed provider is retried elsewhere.
+ */
+internal fun webSearchAttemptOrder(
+    primary: String,
+    apiKeys: Map<String, String>,
+    searxngBaseUrl: String,
+    cffiAvailable: Boolean,
+): List<String> = buildList {
+    add(primary)
+    if (primary == "duckduckgo" && cffiAvailable) add("duckduckgo_cffi")
+    for (provider in WEB_SEARCH_FALLBACK_ORDER) {
+        if (provider in this) continue
+        when {
+            provider == "searxng" -> if (searxngBaseUrl.isNotBlank()) add(provider)
+            !apiKeys[provider].isNullOrBlank() -> add(provider)
+        }
+    }
+}
+
+/** Returns the machine-readable `error` code of a web_search JSON payload, if any. */
+internal fun webSearchErrorCode(resultJson: String): String? = runCatching {
+    val obj = Json.parseToJsonElement(resultJson).jsonObject
+    (obj["error"] as? JsonPrimitive)?.content?.takeIf { it.isNotBlank() }
+}.getOrNull()
+
+/**
+ * One failed provider, as reported back to the model.
+ *
+ * Without this the caller only sees the *last* error, which hides the real cause: a dead
+ * `curl_cffi` bridge followed by an unreachable SearXNG instance looks exactly like "searxng is
+ * broken", even though the primary provider failed first.
+ */
+internal fun webSearchFailureAttempt(provider: String, resultJson: String): JsonObject {
+    val obj = runCatching { Json.parseToJsonElement(resultJson).jsonObject }.getOrNull()
+    return buildJsonObject {
+        put("provider", provider)
+        put("error", (obj?.get("error") as? JsonPrimitive)?.content ?: "unknown")
+        (obj?.get("message") as? JsonPrimitive)?.content
+            ?.takeIf { it.isNotBlank() }
+            ?.let { put("message", it) }
+    }
+}
+
+/** Records which providers failed before the answer that was actually returned. */
+private fun annotateSearchAttempts(resultJson: String, attempts: List<JsonObject>): String =
+    if (attempts.isEmpty()) resultJson else runCatching {
+        val element = Json.parseToJsonElement(resultJson) as? JsonObject ?: return resultJson
+        buildJsonObject {
+            element.forEach { (key, value) -> put(key, value) }
+            put("attempts", JsonArray(attempts))
+        }.toString()
+    }.getOrDefault(resultJson)
+
+class WebSearchToolProvider(
+    private val sandboxFactory: SandboxManagerFactory? = null,
+) : ToolProvider {
     private val webClient = HttpClient.client.newBuilder()
         .callTimeout(Constants.NETWORK_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .readTimeout(Constants.NETWORK_TOOL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .build()
+
+    /** Created lazily: Play builds have no sandbox and must never pay for one. */
+    private val sandbox: SandboxManager? by lazy {
+        runCatching { sandboxFactory?.create() }.getOrNull()
+    }
+
+    private val cffiAvailable: Boolean by lazy {
+        runCatching { sandboxFactory?.isAvailable() == true }.getOrDefault(false)
+    }
 
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> {
         if (!ctx.webSearchEnabled) return emptyList()
@@ -494,13 +574,7 @@ class WebSearchToolProvider : ToolProvider {
 
     override fun handles(name: String): Boolean = name in setOf("web_search", "web_fetch")
 
-    private fun executeWebSearch(arguments: String, ctx: GenerationContext): String {
-        val result = executeWebSearchBody(arguments, ctx)
-        val provider = webSearchProviderDisplayName(normalizeWebSearchProvider(ctx.webSearchProvider))
-        return withSearchProvider(result, provider)
-    }
-
-    private fun executeWebSearchBody(arguments: String, ctx: GenerationContext): String {
+    private suspend fun executeWebSearch(arguments: String, ctx: GenerationContext): String {
         val argsStr = arguments.ifBlank { "{}" }
         val args = Json.decodeFromString<Map<String, kotlinx.serialization.json.JsonElement>>(argsStr)
         val query = (args["query"] as? JsonPrimitive)?.content
@@ -508,38 +582,51 @@ class WebSearchToolProvider : ToolProvider {
         val resultLimit = webSearchResultLimit(ctx.webSearchNumResults)
         val numResults = ((args["num_results"] as? JsonPrimitive)?.content?.toIntOrNull() ?: resultLimit)
             .coerceIn(1, resultLimit)
-        val provider = normalizeWebSearchProvider(ctx.webSearchProvider)
+        val primary = normalizeWebSearchProvider(ctx.webSearchProvider)
 
+        val order = webSearchAttemptOrder(
+            primary = primary,
+            apiKeys = ctx.webSearchApiKeys,
+            searxngBaseUrl = ctx.webSearchBaseUrl,
+            cffiAvailable = cffiAvailable,
+        )
+
+        val attempts = mutableListOf<JsonObject>()
+        var lastResult = ""
+        for (provider in order) {
+            val result = withSearchProvider(
+                searchWithProvider(provider, query, numResults, ctx),
+                webSearchProviderDisplayName(provider),
+            )
+            lastResult = result
+            if (webSearchErrorCode(result) == null) return annotateSearchAttempts(result, attempts)
+            attempts.add(webSearchFailureAttempt(provider, result))
+        }
+
+        return annotateSearchAttempts(lastResult, attempts)
+    }
+
+    private suspend fun searchWithProvider(
+        provider: String,
+        query: String,
+        numResults: Int,
+        ctx: GenerationContext,
+    ): String {
         return try {
-            // DuckDuckGo is a scraper, not an API — handle it separately.
+            // DuckDuckGo (scraper) and its sandbox curl_cffi twin return the same shape.
             if (provider == "duckduckgo") {
                 val scraper = DuckDuckGoScraper(webClient)
-                return when (val r = scraper.search(query, numResults)) {
-                    is DuckDuckGoScraper.SearchResponse.Success -> {
-                        val rawResults = buildJsonArray {
-                            r.results.forEach { result ->
-                                add(buildJsonObject {
-                                    put("title", result.title)
-                                    put("url", result.url)
-                                    put("description", result.snippet)
-                                })
-                            }
-                        }
-                        buildJsonObject {
-                            put("type", "web_search")
-                            put("query", query)
-                            put("results", rawResults)
-                        }.toString()
-                    }
-                    is DuckDuckGoScraper.SearchResponse.Error -> {
-                        buildJsonObject {
-                            put("type", "web_search")
-                            put("query", query)
-                            put("error", r.type.name.lowercase())
-                            put("message", r.message)
-                        }.toString()
-                    }
-                }
+                return duckDuckGoJson(scraper.search(query, numResults), query)
+            }
+            if (provider == "duckduckgo_cffi") {
+                val manager = sandbox
+                    ?: return buildJsonObject {
+                        put("type", "web_search")
+                        put("query", query)
+                        put("error", "sandbox_unavailable")
+                        put("message", "The Local Sandbox is not available in this build.")
+                    }.toString()
+                return duckDuckGoJson(CffiSearchBridge(manager).search(query, numResults), query)
             }
 
             val apiKey = ctx.webSearchApiKeys[provider].orEmpty()
@@ -636,6 +723,32 @@ class WebSearchToolProvider : ToolProvider {
                 put("message", e.message ?: "")
             }.toString()
         }
+    }
+
+    /** Shared JSON shape for the DuckDuckGo scraper and its sandbox `curl_cffi` twin. */
+    private fun duckDuckGoJson(
+        response: DuckDuckGoScraper.SearchResponse,
+        query: String,
+    ): String = when (response) {
+        is DuckDuckGoScraper.SearchResponse.Success -> buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("results", buildJsonArray {
+                response.results.forEach { result ->
+                    add(buildJsonObject {
+                        put("title", result.title)
+                        put("url", result.url)
+                        put("description", result.snippet)
+                    })
+                }
+            })
+        }.toString()
+        is DuckDuckGoScraper.SearchResponse.Error -> buildJsonObject {
+            put("type", "web_search")
+            put("query", query)
+            put("error", response.type.name.lowercase())
+            put("message", response.message)
+        }.toString()
     }
 
     private suspend fun executeWebFetch(arguments: String, ctx: GenerationContext): String {
