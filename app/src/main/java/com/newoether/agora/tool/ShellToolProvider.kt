@@ -54,6 +54,7 @@ class ShellToolProvider(
         summary: String,
         conversationId: String?,
         detail: ShellActionDetail?,
+        description: String,
     ) -> Boolean)? = null
 
     /** Best-effort cleanup after the caller has committed these exact results to Room. */
@@ -89,9 +90,10 @@ class ShellToolProvider(
         device: ShellDeviceConfig?,
         summary: String,
         detail: ShellActionDetail? = null,
+        description: String = "",
     ): Boolean {
         val target = device?.name?.ifBlank { "${device.type} server" } ?: "Local Sandbox"
-        return confirm?.invoke(target, summary, ctx.conversationId, detail) ?: true
+        return confirm?.invoke(target, summary, ctx.conversationId, detail, description) ?: true
     }
 
     // ── Helpers ────────────────────────────────────────────
@@ -112,6 +114,10 @@ class ShellToolProvider(
 
     override fun definitions(ctx: GenerationContext): List<ToolDefinition> =
         ShellToolDefinitions.build(ctx)
+
+    /** Low Context Mode schema: shell_list, shell_exec and file_view_image only. */
+    fun minimalDefinitions(ctx: GenerationContext): List<ToolDefinition> =
+        ShellToolDefinitions.buildMinimal(ctx)
 
     override suspend fun execute(name: String, arguments: String, ctx: GenerationContext): String {
         return when (BuiltInToolNames.canonical(name)) {
@@ -244,7 +250,13 @@ class ShellToolProvider(
                     command = command,
                 )
             return try {
-                if (!confirmTarget(ctx, backend.device, "start background job: $ $command")) {
+                if (!confirmTarget(
+                        ctx,
+                        backend.device,
+                        "start background job: $ $command",
+                        description = arg(args, "description"),
+                    )
+                ) {
                     return jsonError(
                         "shell_exec",
                         "denied_by_user: the user declined to run this background command",
@@ -271,7 +283,13 @@ class ShellToolProvider(
             ?: return jsonError("shell_exec", serverNotFoundMessage(serverName, ctx))
         return try {
             // Confirmation follows the resolved target, including the local sandbox.
-            if (!confirmTarget(ctx, backend.device, "$ $command")) {
+            if (!confirmTarget(
+                    ctx,
+                    backend.device,
+                    "$ $command",
+                    description = arg(args, "description"),
+                )
+            ) {
                 return jsonError("shell_exec", "denied_by_user: the user declined to run this command", server = serverName, command = command)
             }
             if (backend.supportsStandardTools) {
@@ -380,7 +398,13 @@ class ShellToolProvider(
             ),
         )
         try {
-            if (!confirmTarget(ctx, backend.device, "$ $command")) {
+            if (!confirmTarget(
+                    ctx,
+                    backend.device,
+                    "$ $command",
+                    description = arg(args, "description"),
+                )
+            ) {
                 emit(
                     ToolExecutionEvent.Completed(
                         jsonError(
@@ -450,7 +474,13 @@ class ShellToolProvider(
                 server = serverName,
             )
         return try {
-            if (!confirmTarget(ctx, backend.device, "stop background shell job: $jobId")) {
+            if (!confirmTarget(
+                    ctx,
+                    backend.device,
+                    "stop background shell job: $jobId",
+                    description = arg(args, "description"),
+                )
+            ) {
                 return jsonError(
                     "shell_job_stop",
                     "denied_by_user: the user declined to stop this job",
@@ -572,6 +602,7 @@ class ShellToolProvider(
                     backend.device,
                     "write file: $path",
                     ShellActionDetail.Write(path, content),
+                    description = arg(args, "description"),
                 )
             ) {
                 return jsonError("file_write", "denied_by_user: the user declined to write this file", server = serverName)
@@ -609,6 +640,7 @@ class ShellToolProvider(
                     backend.device,
                     "edit file: $path",
                     ShellActionDetail.Edit(path, edits),
+                    description = arg(args, "description"),
                 )
             ) {
                 return jsonError(toolName, "denied_by_user: the user declined to edit this file", server = serverName)
@@ -658,7 +690,13 @@ class ShellToolProvider(
                         put("truncated", truncated)
                     }.toString()
                 },
-                onFailure = { e -> jsonError("file_glob", e.message ?: "Unknown error") }
+                onFailure = { e ->
+                    jsonError(
+                        "file_glob",
+                        readableFileToolFailure("file_glob", e.message),
+                        server = backend.device?.name ?: "Local Sandbox",
+                    )
+                }
             )
         } finally {
             backend.close()
@@ -687,7 +725,13 @@ class ShellToolProvider(
             val result = backend.fileGrep(pattern, basePath, fileGlob, options)
             return result.fold(
                 onSuccess = { grep -> fileGrepJson(pattern, grep, contextRequested = context > 0) },
-                onFailure = { e -> jsonError("file_grep", e.message ?: "Unknown error") }
+                onFailure = { e ->
+                    jsonError(
+                        "file_grep",
+                        readableFileToolFailure("file_grep", e.message),
+                        server = backend.device?.name ?: "Local Sandbox",
+                    )
+                }
             )
         } finally {
             backend.close()

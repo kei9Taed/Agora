@@ -26,6 +26,10 @@ class SettingsManager(private val context: Context) {
     internal val backupPreferenceStore = SettingsBackupPreferenceStore(context.dataStore)
     internal val systemPromptStore = SettingsSystemPromptStore(context.dataStore, json)
     internal val shellDeviceStore = SettingsShellDeviceStore(context.dataStore, json)
+    internal val attachmentStore = SettingsAttachmentStore(context.dataStore)
+    internal val localInferenceStore = SettingsLocalInferenceStore(context.dataStore)
+    internal val providerListStore = ProviderListStore(context.dataStore, json)
+    internal val providerEditorStore = ProviderEditorStore(context.dataStore, json, providerListStore)
 
     companion object {
         const val DEFAULT_PROXY_HOST = "127.0.0.1"
@@ -42,8 +46,7 @@ class SettingsManager(private val context: Context) {
     suspend fun updateCustomProviderCache(providerId: String, enabled: Boolean? = null, ttl: String? = null) =
         modelPreferenceStore.updateCustomProviderCache(providerId, enabled, ttl)
     val providerBaseUrls: Flow<Map<String, String>> = modelPreferenceStore.providerBaseUrls
-    val customEndpointResolutions: Flow<Map<String, CustomEndpointResolution>> =
-        modelPreferenceStore.customEndpointResolutions
+    val customEndpointResolutions: Flow<Map<String, CustomEndpointResolution>> = modelPreferenceStore.customEndpointResolutions
     val availableModels: Flow<Map<String, List<String>>> = modelPreferenceStore.availableModels
     val customModels: Flow<Set<String>> = modelPreferenceStore.customModels
     val enabledModels: Flow<Set<String>> = modelPreferenceStore.enabledModels
@@ -56,10 +59,7 @@ class SettingsManager(private val context: Context) {
     val activeSystemPromptId: Flow<String?> = systemPromptStore.activeSystemPromptId
 
     val maxContextWindow: Flow<Int> = context.dataStore.data.map { preferences ->
-        ContextBudget.normalize(
-            preferences[CONTEXT_TOKEN_BUDGET]?.toIntOrNull()
-                ?: preferences[MAX_CONTEXT_WINDOW]?.toIntOrNull()
-        )
+        ContextBudget.normalize(preferences[CONTEXT_TOKEN_BUDGET]?.toIntOrNull() ?: preferences[MAX_CONTEXT_WINDOW]?.toIntOrNull())
     }
     val visualizeContextRollout: Flow<Boolean> = context.dataStore.data.map { it[VISUALIZE_CONTEXT_ROLLOUT] ?: false }
     val contextCompactEnabled: Flow<Boolean> = context.dataStore.data.map {
@@ -98,19 +98,15 @@ class SettingsManager(private val context: Context) {
     val openAiServiceTier: Flow<String> = context.dataStore.data.map { pref ->
         OpenAiServiceTiers.normalize(pref[OPENAI_SERVICE_TIER])
     }
-    val openAiResponsesApiEnabled: Flow<Boolean> =
-        context.dataStore.data.map { it[OPENAI_RESPONSES_API_ENABLED] ?: false }
+    val openAiResponsesApiEnabled: Flow<Boolean> = context.dataStore.data.map { it[OPENAI_RESPONSES_API_ENABLED] ?: false }
+    val replayReasoningInHistory: Flow<Boolean> = context.dataStore.data.map { it[REPLAY_REASONING_IN_HISTORY] ?: false }
     val titleGenerationEnabled: Flow<Boolean> = context.dataStore.data.map { it[TITLE_GENERATION_ENABLED] ?: true }
     val titleGenerationModel: Flow<String?> = context.dataStore.data.map { it[TITLE_GENERATION_MODEL] }
     val titleGenerationPrompt: Flow<String> = context.dataStore.data.map { pref ->
         pref[TITLE_GENERATION_PROMPT]?.takeIf { it.isNotBlank() } ?: BuiltInPrompts.TITLE_GENERATION_SYSTEM
     }
-    val titleGenerationNotificationsEnabled: Flow<Boolean> = context.dataStore.data.map {
-        it[TITLE_GENERATION_NOTIFICATIONS_ENABLED] ?: true
-    }
-    val imageTranscriptionEnabled: Flow<Boolean> = context.dataStore.data.map {
-        it[IMAGE_TRANSCRIPTION_ENABLED] ?: true
-    }
+    val titleGenerationNotificationsEnabled: Flow<Boolean> = context.dataStore.data.map { it[TITLE_GENERATION_NOTIFICATIONS_ENABLED] ?: false }
+    val imageTranscriptionEnabled: Flow<Boolean> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_ENABLED] ?: false }
     val imageTranscriptionEnabledModels: Flow<Set<String>> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_ENABLED_MODELS] ?: emptySet() }
     val imageTranscriptionModel: Flow<String?> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_MODEL] }
     val imageTranscriptionBatchSize: Flow<Int> = context.dataStore.data.map { it[IMAGE_TRANSCRIPTION_BATCH_SIZE] ?: 3 }
@@ -128,6 +124,7 @@ class SettingsManager(private val context: Context) {
     }
     val ragSearchEnabled: Flow<Boolean> = context.dataStore.data.map { it[RAG_SEARCH_ENABLED] ?: false }
     val modelSearchMethod: Flow<String> = context.dataStore.data.map { it[MODEL_SEARCH_METHOD] ?: "keyword" }
+    val attachmentMode: Flow<String> = attachmentStore.attachmentMode
     val manualSearchMethod: Flow<String> = context.dataStore.data.map { it[MANUAL_SEARCH_METHOD] ?: "keyword" }
     val embeddingModels: Flow<List<EmbeddingModelConfig>> = context.dataStore.data.map { pref ->
         val jsonStr = pref[EMBEDDING_MODELS_JSON] ?: "[]"
@@ -163,14 +160,18 @@ class SettingsManager(private val context: Context) {
     val conversationSettings: Flow<Map<String, ConversationSettings>> =
         context.dataStore.data.map { preferences -> decodeConversationSettings(preferences, json) }
     val autoCacheEnabled: Flow<Boolean> = context.dataStore.data.map { it[AUTO_CACHE_ENABLED] ?: true }
-    val showUncachedNotification: Flow<Boolean> =
-        context.dataStore.data.map { it[SHOW_UNCACHED_NOTIFICATION] ?: true }
+    val showUncachedNotification: Flow<Boolean> = context.dataStore.data.map { it[SHOW_UNCACHED_NOTIFICATION] ?: true }
     val autoUpdateCheck: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UPDATE_CHECK] ?: true }
     val lastUpdateCheckTime: Flow<Long> = context.dataStore.data.map { it[LAST_UPDATE_CHECK_TIME] ?: 0L }
     val localChatModels: Flow<List<LocalChatModelConfig>> = modelPreferenceStore.localChatModels
     val phoneUse = com.newoether.agora.phone.PhoneUseSettingsStore(context.dataStore)
     val localModelIdleRetentionMinutes: Flow<Int> = modelPreferenceStore.localModelIdleRetentionMinutes
     val localLowContextModeEnabled: Flow<Boolean> = modelPreferenceStore.localLowContextModeEnabled
+    val localToolIncapableModels: Flow<Set<String>> = modelPreferenceStore.localToolIncapableModels
+    val localInferenceThreads: Flow<Int> = localInferenceStore.inferenceThreads
+    val localKvCacheType: Flow<String> = localInferenceStore.kvCacheType
+    suspend fun markLocalToolIncapableTemplate(modelId: String) =
+        modelPreferenceStore.markLocalToolIncapable(modelId)
     val customProviders: Flow<List<CustomProviderConfig>> = modelPreferenceStore.customProviders
 
     val showDocumentationFab: Flow<Boolean> = context.dataStore.data.map { it[SHOW_DOCUMENTATION_FAB] ?: true }
@@ -292,10 +293,12 @@ class SettingsManager(private val context: Context) {
     suspend fun saveAvailableModels(provider: String, models: List<String>) =
         modelPreferenceStore.saveAvailableModels(provider, models)
 
+    suspend fun renameProviderModelReferences(oldName: String, newName: String) = modelPreferenceStore.renameProviderModelReferences(oldName, newName)
+
     suspend fun saveCustomModels(models: Set<String>) =
         modelPreferenceStore.saveCustomModels(models)
 
-    suspend fun addCustomModel(modelId: String, alias: String, showProviderName: Boolean = true) =
+    suspend fun addCustomModel(modelId: String, alias: String, showProviderName: Boolean = providerNameShownByDefault(modelId)) =
         modelPreferenceStore.addCustomModel(modelId, alias, showProviderName)
 
     suspend fun replaceCustomModel(
@@ -415,12 +418,9 @@ class SettingsManager(private val context: Context) {
     suspend fun saveLastUpdateCheckTime(time: Long) {
         context.dataStore.edit { it[LAST_UPDATE_CHECK_TIME] = time }
     }
-    suspend fun saveModelSearchMethod(method: String) {
-        context.dataStore.edit { it[MODEL_SEARCH_METHOD] = method }
-    }
-    suspend fun saveManualSearchMethod(method: String) {
-        context.dataStore.edit { it[MANUAL_SEARCH_METHOD] = method }
-    }
+    suspend fun saveModelSearchMethod(method: String) { context.dataStore.edit { it[MODEL_SEARCH_METHOD] = method } }
+    suspend fun saveAttachmentMode(mode: String) = attachmentStore.saveAttachmentMode(mode)
+    suspend fun saveManualSearchMethod(method: String) { context.dataStore.edit { it[MANUAL_SEARCH_METHOD] = method } }
     suspend fun saveEmbeddingModels(models: List<EmbeddingModelConfig>) {
         context.dataStore.edit { it[EMBEDDING_MODELS_JSON] = json.encodeToString(models) }
     }
@@ -539,6 +539,8 @@ class SettingsManager(private val context: Context) {
 
     suspend fun saveLocalLowContextModeEnabled(enabled: Boolean) =
         modelPreferenceStore.saveLocalLowContextModeEnabled(enabled)
+    suspend fun saveLocalInferenceThreads(threads: Int) = localInferenceStore.saveInferenceThreads(threads)
+    suspend fun saveLocalKvCacheType(type: String) = localInferenceStore.saveKvCacheType(type)
 
     suspend fun saveCustomProviders(providers: List<CustomProviderConfig>) =
         modelPreferenceStore.saveCustomProviders(providers)
@@ -588,9 +590,10 @@ class SettingsManager(private val context: Context) {
             else it[TITLE_GENERATION_PROMPT] = prompt
         }
     }
-    suspend fun saveImageTranscriptionEnabledModels(models: Set<String>) {
+    suspend fun saveImageTranscriptionEnabledModels(models: Set<String>) =
         context.dataStore.edit { it[IMAGE_TRANSCRIPTION_ENABLED_MODELS] = models }
-    }
+    suspend fun saveReplayReasoningInHistory(enabled: Boolean) =
+        context.dataStore.edit { it[REPLAY_REASONING_IN_HISTORY] = enabled }
     suspend fun saveImageTranscriptionEnabled(enabled: Boolean) {
         context.dataStore.edit { it[IMAGE_TRANSCRIPTION_ENABLED] = enabled }
     }

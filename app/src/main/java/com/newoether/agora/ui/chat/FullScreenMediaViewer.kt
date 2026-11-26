@@ -15,7 +15,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.rounded.Close
 import com.newoether.agora.ui.motion.MotionAwareCircularProgressIndicator as CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,10 +65,8 @@ import kotlin.math.abs
 
 private fun hasVideoExtension(url: String): Boolean {
     val normalized = url.substringBefore('?').substringBefore('#').lowercase()
-    return normalized.endsWith(".mp4") ||
-        normalized.endsWith(".webm") ||
-        normalized.endsWith(".mov") ||
-        normalized.endsWith(".avi") ||
+    // The containers markdownVideoLink embeds, so a streamed Markdown video pages as a video.
+    return listOf(".mp4", ".m4v", ".webm", ".mov", ".mkv", ".avi", ".3gp", ".ogv").any(normalized::endsWith) ||
         normalized.contains("vid_original_")
 }
 
@@ -140,6 +138,7 @@ fun FullScreenMediaViewer(
                     haptics.longPress()
                     actionsVisible = true
                 },
+                onControlsVisibleChange = { showOverlay = it },
             )
             if (actionsVisible) {
                 VideoActionsSheet(
@@ -160,7 +159,7 @@ fun FullScreenMediaViewer(
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     modifier = Modifier.shadow(8.dp, CircleShape)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
                 }
             }
         }
@@ -236,7 +235,7 @@ private fun PdfPager(
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     modifier = Modifier.shadow(8.dp, CircleShape)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
                 }
             }
         }
@@ -330,6 +329,9 @@ private fun MediaPager(
                                 actionsAreVideo = true
                                 actionsForUrl = mediaUrl
                             },
+                            // The close button and the page counter are part of the same
+                            // state machine as the player's own control bar.
+                            onControlsVisibleChange = { showOverlay = it },
                         )
                     }
                 }
@@ -388,7 +390,7 @@ private fun MediaPager(
                     color = MaterialTheme.colorScheme.surfaceContainer,
                     modifier = Modifier.shadow(8.dp, CircleShape)
                 ) {
-                    Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
                 }
             }
         }
@@ -427,7 +429,7 @@ private fun SingleImage(
                 color = MaterialTheme.colorScheme.surfaceContainer,
                 modifier = Modifier.shadow(8.dp, CircleShape)
             ) {
-                Icon(Icons.Default.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
+                Icon(Icons.Rounded.Close, contentDescription = stringResource(R.string.provider_close), tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(48.dp).padding(12.dp))
             }
         }
     }

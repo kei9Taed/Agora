@@ -2,23 +2,25 @@ package com.newoether.agora.ui.chat.message
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.input.rememberTextFieldState
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.SelectAll
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Shape
 import com.newoether.agora.R
+import com.newoether.agora.util.horizontalEdgeFade
 import com.newoether.agora.util.noOpBringIntoView
 import com.newoether.agora.model.AttachmentItem
 import com.newoether.agora.model.ChatMessage
@@ -294,8 +297,23 @@ internal fun UserMessageBubble(
                         }
                         val allMediaUrls = mediaProjection.urls
 
+                        val mediaRowState = rememberLazyListState()
+                        val leftFade by animateFloatAsState(
+                            if (mediaRowState.canScrollBackward) 1f else 0f,
+                            animationSpec = tween(200),
+                            label = "attachmentLeftFade",
+                        )
+                        val rightFade by animateFloatAsState(
+                            if (mediaRowState.canScrollForward) 1f else 0f,
+                            animationSpec = tween(200),
+                            label = "attachmentRightFade",
+                        )
                         LazyRow(
-                            modifier = Modifier.padding(bottom = if (message.text.isNotEmpty()) 8.dp else 0.dp),
+                            state = mediaRowState,
+                            modifier = Modifier
+                                // Edge mask outside the scroll, as the LaTeX block and drawer do.
+                                .horizontalEdgeFade(edgeFadeDp = 32f, leftWeight = leftFade, rightWeight = rightFade)
+                                .padding(bottom = if (message.text.isNotEmpty()) 8.dp else 0.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             itemsIndexed(displayItems) { displayIndex, (_, imagePath, metaItem) ->
@@ -405,7 +423,7 @@ internal fun UserMessageBubble(
                             haptics.confirm()
                             showMenu = false
                         },
-                        leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                        leadingIcon = { Icon(Icons.Rounded.ContentCopy, null) },
                     )
                 }
                 if (allowMutations) AgoraDropdownMenuItem(
@@ -415,7 +433,7 @@ internal fun UserMessageBubble(
                         if (editEnabled) onStartEdit()
                     },
                     enabled = editEnabled,
-                    leadingIcon = { Icon(Icons.Default.Edit, null) },
+                    leadingIcon = { Icon(Icons.Rounded.Edit, null) },
                 )
                 if (message.text.isNotBlank()) {
                     AgoraDropdownMenuItem(
@@ -424,7 +442,7 @@ internal fun UserMessageBubble(
                             showMenu = false
                             onSelectText()
                         },
-                        leadingIcon = { Icon(Icons.Default.SelectAll, null) },
+                        leadingIcon = { Icon(Icons.Rounded.SelectAll, null) },
                     )
                 }
                 AgoraDropdownMenuItem(
@@ -433,7 +451,7 @@ internal fun UserMessageBubble(
                         showMenu = false
                         onShowInfo()
                     },
-                    leadingIcon = { Icon(Icons.Default.Info, null) },
+                    leadingIcon = { Icon(Icons.Rounded.Info, null) },
                 )
                 if (allowMutations) AgoraDropdownMenuItem(
                     text = {
@@ -453,7 +471,7 @@ internal fun UserMessageBubble(
                     enabled = !isLoading,
                     leadingIcon = {
                         Icon(
-                            Icons.Default.Delete,
+                            Icons.Rounded.Delete,
                             null,
                             tint = if (!isLoading) {
                                 MaterialTheme.colorScheme.error
@@ -476,11 +494,11 @@ internal fun UserMessageBubble(
                     .padding(horizontal = 4.dp)
             ) {
                 IconButton(onClick = { onSwitchBranch(-1) }, enabled = branchIndex > 0 && isEditingAllowed, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, null, modifier = Modifier.size(16.dp))
                 }
                 Text("${branchIndex + 1} / $totalBranches", style = MaterialTheme.typography.labelSmall)
                 IconButton(onClick = { onSwitchBranch(1) }, enabled = branchIndex < totalBranches - 1 && isEditingAllowed, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, modifier = Modifier.size(16.dp))
+                    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, modifier = Modifier.size(16.dp))
                 }
             }
         }

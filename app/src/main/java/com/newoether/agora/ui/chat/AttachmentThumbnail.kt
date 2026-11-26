@@ -2,9 +2,9 @@ package com.newoether.agora.ui.chat
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.widget.Toast
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
@@ -22,9 +22,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.BrokenImage
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.rounded.BrokenImage
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import com.newoether.agora.model.AttachmentItem
 import com.newoether.agora.model.AttachmentMeta
 import com.newoether.agora.ui.common.LocalAgoraHaptics
+import com.newoether.agora.ui.common.LocalSnackbarMessage
 import com.newoether.agora.util.AttachmentSourceReader
 import com.newoether.agora.util.Constants
 import kotlinx.coroutines.Dispatchers
@@ -171,7 +172,7 @@ fun AttachmentThumbnailItem(
             contentAlignment = Alignment.Center,
         ) {
             Icon(
-                Icons.Default.BrokenImage,
+                Icons.Rounded.BrokenImage,
                 contentDescription = androidx.compose.ui.res.stringResource(
                     com.newoether.agora.R.string.attachment_copy_failed_image,
                 ),
@@ -292,9 +293,7 @@ fun AttachmentThumbnailItem(
             if (actionsVisible && actionSource != null) {
                 VideoActionsSheet(
                     url = actionSource,
-                    onMessage = { message ->
-                        Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-                    },
+                    onMessage = LocalSnackbarMessage.current,
                     onDismiss = { actionsVisible = false },
                 )
             }
@@ -395,7 +394,7 @@ private fun MessageMediaThumbnail(
                 ) {
                     if (showPlay) {
                         Icon(
-                            Icons.Default.PlayArrow,
+                            Icons.Rounded.PlayArrow,
                             contentDescription = "Play",
                             tint = Color.White,
                             modifier = Modifier
@@ -412,7 +411,7 @@ private fun MessageMediaThumbnail(
                     contentAlignment = Alignment.Center,
                 ) {
                     Icon(
-                        Icons.Default.BrokenImage,
+                        Icons.Rounded.BrokenImage,
                         contentDescription = androidx.compose.ui.res.stringResource(
                             com.newoether.agora.R.string.attachment_copy_failed_image,
                         ),
@@ -467,23 +466,66 @@ private fun scaledPoster(bitmap: Bitmap): Bitmap {
     return scaled
 }
 
-/** Decodes one frame of [source] for a poster; the result never leaves memory. */
+/**
+ * Decodes one frame of [source] for a poster.
+ *
+ * [persistTo] names a still owned by a content-addressed media copy: the first decode writes it
+ * there, and later compositions, scrolls and process restarts read the still instead of decoding
+ * the video again. The in-memory LRU still fronts both paths.
+ */
 @Composable
-internal fun rememberVideoPoster(source: String?): Bitmap? {
+internal fun rememberVideoPoster(source: String?, persistTo: File? = null): Bitmap? {
     val context = LocalContext.current
     var poster by remember(source) {
         mutableStateOf(source?.takeIf(String::isNotBlank)?.let(videoPosterCache::get))
     }
-    LaunchedEffect(source) {
+    LaunchedEffect(source, persistTo) {
         val key = source?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
-        if (poster != null) return@LaunchedEffect
-        val loaded = withContext(Dispatchers.IO) { loadVideoPoster(context.applicationContext, key) }
+        poster?.let { existing ->
+            // The content-addressed copy may have landed after the first decode; persist the
+            // still once the target name exists instead of waiting for a process restart.
+            if (persistTo != null) {
+                withContext(Dispatchers.IO) {
+                    if (!persistTo.isFile) writePosterFile(existing, persistTo)
+                }
+            }
+            return@LaunchedEffect
+        }
+        val loaded = withContext(Dispatchers.IO) {
+            val cached = persistTo?.takeIf(File::isFile)?.let(::readPosterFile)
+            cached ?: loadVideoPoster(context.applicationContext, key)?.also { bitmap ->
+                persistTo?.let { target -> writePosterFile(bitmap, target) }
+            }
+        }
         if (loaded != null) {
             videoPosterCache.put(key, loaded)
             poster = loaded
         }
     }
     return poster
+}
+
+private fun readPosterFile(file: File): Bitmap? = runCatching {
+    BitmapFactory.decodeFile(file.absolutePath)?.let(::scaledPoster)
+}.getOrNull()
+
+private fun writePosterFile(bitmap: Bitmap, target: File) {
+    runCatching {
+        target.parentFile?.mkdirs()
+        val staging = File.createTempFile(".poster-", ".tmp", target.parentFile)
+        try {
+            staging.outputStream().use { output ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 85, output)
+                output.flush()
+            }
+            if (!staging.renameTo(target)) {
+                target.delete()
+                staging.copyTo(target, overwrite = true)
+            }
+        } finally {
+            staging.delete()
+        }
+    }
 }
 
 /** Video cell with a real first frame; the camera glyph stays only while nothing decodes. */
@@ -509,7 +551,7 @@ internal fun VideoPosterThumbnail(
             )
             if (showPlay) {
                 Icon(
-                    Icons.Default.PlayArrow,
+                    Icons.Rounded.PlayArrow,
                     contentDescription = null,
                     tint = Color.White,
                     modifier = Modifier
@@ -520,7 +562,7 @@ internal fun VideoPosterThumbnail(
             }
         } else {
             Icon(
-                Icons.Default.Videocam,
+                Icons.Rounded.Videocam,
                 contentDescription = contentDescription,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(28.dp),

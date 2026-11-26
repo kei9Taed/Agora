@@ -164,6 +164,11 @@
     <string name="default_thinking">Razonamiento predeterminado</string>
     <string name="gen_thinking_enabled">Razonamiento</string>
     <string name="gen_thinking_enabled_desc">Activa la capacidad de razonamiento del modelo</string>
+    <string name="replay_reasoning_in_history">Repetir razonamiento en el historial</string>
+    <string name="replay_reasoning_in_history_desc">Enviar reasoning_content en cada mensaje del asistente; los modelos que exigen el campo aceptan un valor vacío</string>
+    <string name="attachments_group_title">Archivos adjuntos</string>
+    <string name="attachment_sandbox_link">Enlaces de archivos al sandbox</string>
+    <string name="attachment_sandbox_link_desc">Adjunta archivos como enlaces del sandbox cuando esté disponible; si no, incrusta su contenido; desactivado: incrustar siempre</string>
     <string name="gen_thinking_level">Nivel de razonamiento</string>
     <string name="gen_thinking_level_desc">Controla la profundidad del razonamiento; mayor = razonamiento más exhaustivo</string>
     <string name="gen_thinking_level_low">Bajo</string>
@@ -482,6 +487,17 @@
     <string name="provider_cache_desc">Solicitar caché de instrucciones; la caché del relay es independiente</string>
     <string name="provider_cache_duration">Duración de la caché</string>
     <string name="provider_cache_duration_desc">Cuánto tiempo se pueden reutilizar las instrucciones en caché</string>
+    <string name="provider_save_failed">No se pudo guardar la configuración del proveedor</string>
+    <string name="provider_custom_entry_desc">Endpoint compatible con OpenAI, Anthropic o Google</string>
+    <string name="provider_remove_title">¿Quitar %1$s?</string>
+    <string name="provider_remove_text">La configuración se conserva. Vuelve a añadirlo para restaurarla.</string>
+    <string name="provider_remove">Quitar</string>
+    <string name="provider_search_hint">Buscar proveedores</string>
+    <string name="provider_custom_entry">Proveedor personalizado</string>
+    <string name="provider_add_no_match">No hay proveedores coincidentes</string>
+    <string name="provider_added">Añadido</string>
+    <string name="provider_list_empty">Aún no hay proveedores</string>
+    <string name="provider_reorder">Reordenar</string>
     <!-- Network and service tier -->
     <string name="settings_group_network">Red</string>
     <string name="settings_proxy">Proxy</string>

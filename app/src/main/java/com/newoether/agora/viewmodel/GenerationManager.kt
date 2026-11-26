@@ -1,6 +1,7 @@
 package com.newoether.agora.viewmodel
 
 import android.app.Application
+import android.os.SystemClock
 import com.newoether.agora.util.DebugLog
 import com.newoether.agora.api.LlmProvider
 import com.newoether.agora.api.StreamEvent
@@ -31,6 +32,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
+/** Preserve-Context Compact refuses tool rounds without persisting them; bound the retries. */
+internal const val MAX_REFUSED_TOOL_ROUNDS = 4
+
 internal suspend fun acquireGenerationForegroundLease(
     managedExternally: Boolean,
     acquire: suspend () -> Boolean,
@@ -59,6 +63,7 @@ class GenerationManager(
         summary: String,
         conversationId: String?,
         detail: ShellActionDetail?,
+        description: String,
     ) -> Boolean)? = null
 
     private val toolExecutor = GenerationToolExecutor.createDefault(
@@ -69,8 +74,8 @@ class GenerationManager(
         sandboxFactory = sandboxFactory,
         additionalProviders = additionalToolProviders,
         generatingConversationIds = generatingConversationIds,
-        confirmShellCommand = { server, summary, conversationId, detail ->
-            onConfirmShellCommand?.invoke(server, summary, conversationId, detail) ?: true
+        confirmShellCommand = { server, summary, conversationId, detail, description ->
+            onConfirmShellCommand?.invoke(server, summary, conversationId, detail, description) ?: true
         },
     )
     private val contextAccounting = GenerationContextAccounting(toolExecutor)
@@ -263,6 +268,12 @@ class GenerationManager(
                 "messages=${currentPath.size} tools=${rawProviderConfig.tools.orEmpty().size}",
             )
             val providerConfig = rawProviderConfig
+            // The API-only invocation is part of the raw path so tool continuations (refused
+            // rounds of a Preserve-Context Compact) keep it before their tool rows.
+            val dispatchPath = config.initialUserPrompt?.takeIf(String::isNotBlank)
+                ?.let { prompt -> currentPath + initialUserMessage(currentPath.lastOrNull(), prompt) }
+                ?: currentPath
+            val rejectToolCalls = config.rejectToolCalls
 
             var toolCallData: ToolCallData? = null
             var toolCallDataList: List<ToolCallData> = emptyList()
@@ -294,6 +305,10 @@ class GenerationManager(
                     output.generationErrorMessage,
                     output.generationErrorCode,
                     answerDeltas = output.currentAnswerDeltas,
+                    // Sampled right after liveDurationMs(): the UI resumes this timer from the
+                    // generation clock instead of restarting it on every recomposition.
+                    thoughtDurationSampledAtElapsedRealtimeMs = SystemClock.elapsedRealtime()
+                        .takeIf { output.thoughtTiming.isRunning },
                 ),
                 retryText = output.retryText,
                 runId = runId,
@@ -324,6 +339,7 @@ class GenerationManager(
                         conversationId = conversationId,
                         authorizedToolNames = providerConfig.tools.orEmpty()
                             .mapTo(linkedSetOf()) { it.function.name },
+                        rejectionText = COMPACT_TOOL_CALL_REJECTED.takeIf { rejectToolCalls },
                         // file_view_image results reuse this generation's transcription flow when
                         // image transcription is enabled for the current model.
                         toolImageTranscriber =
@@ -369,6 +385,7 @@ class GenerationManager(
             ): ProviderPassOutcome {
                 val providerAnswerStart = output.totalText.length
                 output.beginProviderRequest()
+                var providerResponded = false
                 val providerRequestIndex = providerRequestOrdinal++
                 val providerRequestTrace = if (providerRequestIndex == 0) {
                     requestTrace
@@ -401,6 +418,7 @@ class GenerationManager(
                             },
                             onFirstEvent = onFirstEvent,
                             onEvent = { event ->
+                                providerResponded = true
                                 output.handleStreamEvent(
                                     event = event,
                                     providerAnswerStart = providerAnswerStart,
@@ -423,7 +441,16 @@ class GenerationManager(
                         ),
                     )
                 } finally {
-                    output.tokenUsageAccumulator.finishRequest()
+                    val requestUsage = output.tokenUsageAccumulator.finishRequest()
+                    // A request the provider never answered is not counted as usage.
+                    if (providerResponded) {
+                        com.newoether.agora.data.UsageRecorder.record(
+                            provider = config.providerName,
+                            model = modelName,
+                            usage = requestUsage,
+                            conversationId = conversationId,
+                        )
+                    }
                     output.totalTokenUsage = output.tokenUsageAccumulator.snapshot()
                     output.totalTokenCount = output.totalTokenUsage?.totalTokenCount ?: output.totalTokenCount
                 }
@@ -459,16 +486,15 @@ class GenerationManager(
             }
 
             val apiPath = if (providerConfig.requestResolver != null) {
-                currentPath
+                dispatchPath
             } else {
                 projectGenerationInputMessages(
-                    messages = currentPath,
+                    messages = dispatchPath,
                     includeImages = providerConfig.includeImages,
                     userPrepend = config.userPrepend,
                     userPostpend = config.userPostpend,
                     assistantPrepend = config.assistantPrepend,
                     assistantPostpend = config.assistantPostpend,
-                    initialUserPrompt = config.initialUserPrompt,
                     phoneMaxScreenshots = config.phoneMaxScreenshots,
                 )
             }
@@ -488,7 +514,7 @@ class GenerationManager(
 
             // Multi-tool loop
             var toolRound = 0
-            toolPath = currentPath
+            toolPath = dispatchPath
 
             while (toolCallDataList.isNotEmpty() && output.currentStatus != MessageStatus.ERROR && currentCoroutineContext().isActive) {
                 toolRound++
@@ -513,24 +539,39 @@ class GenerationManager(
                 )
                 toolPath = toolPath + round.pathMessages
                 toolRoundEffects.commitRound { commitIdentity ->
-                    conversations.appendToolRoundToRun(
-                        messages = round.entities,
-                        expectedPass = commitIdentity.pass,
+                    // Refused rounds stay in memory: they are protocol filler for this request
+                    // only and must never become history after the Compact boundary.
+                    if (!rejectToolCalls) {
+                        conversations.appendToolRoundToRun(
+                            messages = round.entities,
+                            expectedPass = commitIdentity.pass,
+                        )
+                    }
+                }
+                if (!rejectToolCalls) {
+                    // A refused round never reaches Room, so its id must never be stamped onto a
+                    // segment: the compact message persists those segments, and a dangling
+                    // reference breaks tool-round resolution on the next cold start.
+                    output.toolOverlay.markCommittedRound(
+                        tcds.mapTo(linkedSetOf()) { call ->
+                            checkNotNull(call.toolCallId) {
+                                "Committed tool call is missing its provider call id"
+                            }
+                        },
+                        toolRoundId = round.entities.first().id,
                     )
                 }
-                output.toolOverlay.markCommittedRound(
-                    tcds.mapTo(linkedSetOf()) { call ->
-                        checkNotNull(call.toolCallId) {
-                            "Committed tool call is missing its provider call id"
-                        }
-                    },
-                    toolRoundId = round.entities.first().id,
-                )
                 publishStreamUpdate(forceCheckpoint = true)
                 uiUpdateGate.recordPublished(System.currentTimeMillis())
                 // A terminal Conch job may be deleted only after the complete tool result is
                 // durable. ACK is best-effort and cannot influence the already-authorized
                 // continuation; Conch's bounded retention remains the failure fallback.
+                if (rejectToolCalls) {
+                    // toolPath already holds this request's history plus the refused round.
+                    toolCallData = null
+                    toolCallDataList = emptyList()
+                    if (toolRound >= MAX_REFUSED_TOOL_ROUNDS) break
+                } else {
                 toolExecutor.acknowledgeCommittedShellJobs(tcds, ctx)
                 val boundaryDecision = callbacks.onToolRoundPersisted()
                 if (boundaryDecision is ToolRoundBoundaryDecision.CompleteForFollowUp) {
@@ -558,6 +599,7 @@ class GenerationManager(
                 if (callbacks.hasQueuedSends()) {
                     endedAtGuidanceBoundary = true
                     break
+                }
                 }
 
                 uiUpdateGate.reset()
