@@ -61,7 +61,6 @@ import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.compose.elements.LocalTableRowIndex
 import org.intellij.markdown.flavours.MarkdownFlavourDescriptor
-import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import com.mikepenz.markdown.annotator.AnnotatorSettings
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
@@ -120,7 +119,7 @@ internal fun buildCitationAwareMarkdownAnnotatedString(
             annotatorSettings = annotatorSettings,
         )
     }
-    return annotated.replaceCitationInlineTokens(citationTokens)
+    return annotated.replaceCitationInlineTokens(citationTokens).trimMarkdownLinkTail()
 }
 
 private const val MARKDOWN_LINE_HEIGHT_MULTIPLIER = 1.1f
@@ -406,7 +405,7 @@ internal fun rememberChatMarkdownAssets(
             imageOwnerId = imageOwnerId,
         )
     }
-    val markdownFlavour = remember { GFMFlavourDescriptor() }
+    val markdownFlavour = remember { AgoraMarkdownFlavour() }
     val markdownRenderContext = remember(
         customMarkdownColors,
         customTypography,

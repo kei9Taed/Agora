@@ -58,6 +58,18 @@ object Constants {
     const val SHELL_CONFIRM_TIMEOUT_MS = 300_000L
     /** Search method identifier for RAG (vector/embedding) search */
     const val SEARCH_METHOD_RAG = "rag"
+    /** Search method identifier for literal keyword search; also the fallback without embeddings. */
+    const val SEARCH_METHOD_KEYWORD = "keyword"
+    /** Attachment delivery: prefer a Local Sandbox file link, falling back to inline content. */
+    const val ATTACHMENT_MODE_SANDBOX_LINK = "sandbox_link"
+    /** Attachment delivery: always embed file content in the prompt. */
+    const val ATTACHMENT_MODE_INLINE = "inline"
+    /** Local KV cache precision: full F16, largest memory footprint. */
+    const val KV_CACHE_TYPE_F16 = "f16"
+    /** Local KV cache precision: 8-bit, about half the F16 footprint with negligible quality loss. */
+    const val KV_CACHE_TYPE_Q8_0 = "q8_0"
+    /** Local KV cache precision: 4-bit, smallest footprint, can hurt long-context quality. */
+    const val KV_CACHE_TYPE_Q4_0 = "q4_0"
 
     // ── Provider name constants ────────────────────────────────
     const val PROVIDER_LOCAL = ModelConstants.PROVIDER_LOCAL

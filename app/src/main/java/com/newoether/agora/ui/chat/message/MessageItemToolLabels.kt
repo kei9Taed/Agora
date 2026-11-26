@@ -4,9 +4,9 @@ import android.content.res.Resources
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AccountTree
-import androidx.compose.material.icons.filled.Build
-import androidx.compose.material.icons.filled.Checklist
+import androidx.compose.material.icons.rounded.AccountTree
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -105,10 +105,10 @@ internal fun mcpToolDisplayName(
 
 internal fun toolHeaderIcon(kind: ToolKind): ImageVector = when (kind) {
     ToolKind.PHONE -> PhoneUseIcon
-    ToolKind.TODO_READ, ToolKind.TODO_UPDATE -> Icons.Default.Checklist
+    ToolKind.TODO_READ, ToolKind.TODO_UPDATE -> Icons.Rounded.Checklist
     ToolKind.SUBAGENT_SPAWN, ToolKind.SUBAGENT_SEND, ToolKind.SUBAGENT_WAIT,
-    ToolKind.SUBAGENT_LIST, ToolKind.SUBAGENT_STOP, ToolKind.SUBAGENT_DELETE -> Icons.Default.AccountTree
-    else -> Icons.Default.Build
+    ToolKind.SUBAGENT_LIST, ToolKind.SUBAGENT_STOP, ToolKind.SUBAGENT_DELETE -> Icons.Rounded.AccountTree
+    else -> Icons.Rounded.Build
 }
 
 internal fun fallbackToolDisplayName(toolName: String): String =
@@ -197,6 +197,8 @@ internal fun Resources.toolSummary(presentation: ToolPresentation): String {
     val subject = presentation.subject
     return when (presentation.state) {
         ToolPresentationState.FAILED -> failedSummary(presentation, subject)
+        // Shell jobs settle TIMED_OUT; other kinds never reach it, so a plain label is enough.
+        ToolPresentationState.TIMED_OUT -> getString(R.string.tool_state_timeout)
         ToolPresentationState.STOPPED -> stoppedToolSummary(presentation)
         ToolPresentationState.BACKGROUND_RUNNING -> getString(R.string.tool_background_job_running_default)
         ToolPresentationState.CALLING,
@@ -375,6 +377,7 @@ internal sealed interface ShellPresentationStatus {
     data object Executing : ShellPresentationStatus
     data class Background(val jobId: String?) : ShellPresentationStatus
     data object Stopped : ShellPresentationStatus
+    data object TimedOut : ShellPresentationStatus
     data class Exit(val code: Int?) : ShellPresentationStatus
 
     /**
@@ -391,6 +394,7 @@ internal fun shellPresentationStatus(presentation: ToolPresentation): ShellPrese
             ShellPresentationStatus.Background(presentation.jobId)
         presentation.isActive -> ShellPresentationStatus.Executing
         presentation.state == ToolPresentationState.STOPPED -> ShellPresentationStatus.Stopped
+        presentation.state == ToolPresentationState.TIMED_OUT -> ShellPresentationStatus.TimedOut
         // A failed call must not fall through to the exit-code branch and read as "completed".
         presentation.state == ToolPresentationState.FAILED ->
             ShellPresentationStatus.Failed(presentation.exitCode, presentation.errorMessage)
@@ -407,6 +411,7 @@ internal fun Resources.shellToolSummary(presentation: ToolPresentation): String 
         is ShellPresentationStatus.Background ->
             getString(R.string.tool_background_job_running_default)
         ShellPresentationStatus.Stopped -> stoppedToolSummary(presentation)
+        ShellPresentationStatus.TimedOut -> getString(R.string.tool_state_timeout)
         is ShellPresentationStatus.Failed -> shellFailureSummary(status)
         is ShellPresentationStatus.Exit -> status.code?.let { code ->
             getString(R.string.tool_shell_returned_code, code)
@@ -440,6 +445,7 @@ internal fun Resources.shellExecutionSummary(presentation: ToolPresentation): St
         is ShellPresentationStatus.Background ->
             getString(R.string.tool_background_job_running_default)
         ShellPresentationStatus.Stopped -> stoppedToolSummary(presentation)
+        ShellPresentationStatus.TimedOut -> getString(R.string.tool_state_timeout)
         is ShellPresentationStatus.Failed -> status.code?.let { code ->
             getString(R.string.tool_shell_detail_returned_code, code)
         } ?: getString(R.string.tool_state_failed)

@@ -164,6 +164,11 @@
     <string name="default_thinking">デフォルトの思考</string>
     <string name="gen_thinking_enabled">思考</string>
     <string name="gen_thinking_enabled_desc">モデルの思考・推論機能を有効にする</string>
+    <string name="replay_reasoning_in_history">履歴で推論を再生</string>
+    <string name="replay_reasoning_in_history_desc">すべてのアシスタントメッセージに reasoning_content を送信します。このフィールドを必須とするモデルは空値も受け付けます</string>
+    <string name="attachments_group_title">添付ファイル</string>
+    <string name="attachment_sandbox_link">サンドボックスのファイルリンク</string>
+    <string name="attachment_sandbox_link_desc">利用可能な場合はファイルをサンドボックスリンクとして添付し、利用できない場合は内容を埋め込みます。オフの場合は常に埋め込みます</string>
     <string name="gen_thinking_level">思考レベル</string>
     <string name="gen_thinking_level_desc">思考の深さを制御。高いほど徹底的な推論</string>
     <string name="gen_thinking_level_low">低</string>
@@ -482,6 +487,17 @@
     <string name="provider_cache_desc">プロンプトのキャッシュを要求します。中継サーバーのキャッシュは独立しています</string>
     <string name="provider_cache_duration">キャッシュ保持期間</string>
     <string name="provider_cache_duration_desc">キャッシュされたプロンプトを再利用できる期間</string>
+    <string name="provider_save_failed">プロバイダー設定を保存できませんでした</string>
+    <string name="provider_custom_entry_desc">OpenAI・Anthropic・Google 互換のエンドポイント</string>
+    <string name="provider_remove_title">%1$s を削除しますか？</string>
+    <string name="provider_remove_text">設定は保持されます。再度追加すると復元されます。</string>
+    <string name="provider_remove">削除</string>
+    <string name="provider_search_hint">プロバイダーを検索</string>
+    <string name="provider_custom_entry">カスタムプロバイダー</string>
+    <string name="provider_add_no_match">一致するプロバイダーはありません</string>
+    <string name="provider_added">追加済み</string>
+    <string name="provider_list_empty">プロバイダーはまだありません</string>
+    <string name="provider_reorder">並べ替え</string>
     <!-- Network and service tier -->
     <string name="settings_group_network">ネットワーク</string>
     <string name="settings_proxy">プロキシ</string>

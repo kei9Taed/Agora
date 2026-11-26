@@ -10,12 +10,16 @@ import { ICON_CONTENT_COPY } from "./icons.js";
 import { htmlPreviewFence } from "./html-preview-fence.js";
 import { mountHtmlPreview } from "./html-preview.js";
 import { mountMarkdownImage } from "./markdown-images.js";
+import { mountMarkdownVideo } from "./markdown-videos.js";
+import { embedVideos, linkBarePaths, linkedMediaType, openLinkedMedia } from "./markdown-links.js";
 
 const escapeHtml = (text) =>
   text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
 // Keep occurrence admission aligned with markdownImageSnapshotKey / parseShellMediaLink.
 const VIDEO_EXTENSIONS = new Set(["mp4", "m4v", "webm", "mov", "mkv", "avi", "3gp", "ogv"]);
+// Readable roots the phone resolves itself; the WebUI streams them through the app, not the browser.
+const LOCAL_VIDEO_ROOTS = ["/home/agora/", "/mnt/shared/", "/storage/emulated/0/", "/storage/self/primary/"];
 
 function videoExtension(raw) {
   const name = raw.split("?")[0].split("#")[0].toLowerCase();
@@ -26,8 +30,15 @@ function videoExtension(raw) {
 // Native renders these as player cards and excludes them from the image occurrence set.
 function isMarkdownVideo(link) {
   const raw = link.trim().replace(/^<([\s\S]*)>$/, "$1");
-  if (!(/^shell:\/\//i.test(raw) || /^https?:\/\//i.test(raw))) return false;
+  const local = LOCAL_VIDEO_ROOTS.some(root => raw.startsWith(root));
+  if (!(/^shell:\/\//i.test(raw) || /^https?:\/\//i.test(raw) || local)) return false;
   return VIDEO_EXTENSIONS.has(videoExtension(raw));
+}
+
+/** Same-origin card target: the phone streams readable roots and Conch videos through its server. */
+function videoCardTarget(href) {
+  const raw = href.trim().replace(/^<([\s\S]*)>$/, "$1");
+  return isMarkdownVideo(raw) && !/^https?:\/\//i.test(raw) ? raw : null;
 }
 
 function supportsImageSnapshot(link) {
@@ -45,6 +56,117 @@ function supportsImageSnapshot(link) {
 }
 
 const SAFE_LINK = /^(https?:|mailto:)/i;
+// Sentence marks that end prose, ASCII and full-width. Kept out of a bare URL, as on the phone.
+const LINK_TAIL_PUNCTUATION = ".,:;!?\"'`…。，、；：！？》」』】”’";
+// Closing brackets belong to the URL only while the URL keeps their opener.
+const LINK_BRACKET_PAIRS = new Map([
+  [")", "("], ["]", "["], ["}", "{"], ["）", "（"], ["】", "【"], ["》", "《"], ["」", "「"], ["』", "『"],
+]);
+
+// Punctuation that never belongs to a bare URL (isUrlStopCharacter on the phone): general
+// punctuation such as dashes and curly quotes, CJK punctuation and full-width ASCII punctuation.
+const URL_STOP = /[\s\u2010-\u2027\u2030-\u205e\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]/;
+
+/**
+ * End of a bare URL: it stops at the first URL_STOP mark (prose often continues with no space after
+ * ， or ）), then before trailing punctuation; balanced brackets stay inside.
+ */
+function trimLinkTail(href) {
+  const stop = href.search(URL_STOP);
+  const url = stop < 0 ? href : href.slice(0, stop);
+  let end = url.length;
+  while (end > 0) {
+    const last = url[end - 1];
+    const opener = LINK_BRACKET_PAIRS.get(last);
+    if (opener) {
+      let closers = 0, openers = 0;
+      for (let index = 0; index < end; index++) {
+        if (url[index] === last) closers++;
+        else if (url[index] === opener) openers++;
+      }
+      if (closers <= openers) return url.slice(0, end);
+      end--;
+    } else if (LINK_TAIL_PUNCTUATION.includes(last)) {
+      end--;
+    } else {
+      return url.slice(0, end);
+    }
+  }
+  return url.slice(0, end);
+}
+
+/**
+ * marked's GFM autolink stops at whitespace and backpedals only ASCII punctuation, so a closing
+ * full-width bracket or sentence mark typed right after a bare URL lands inside both the anchor
+ * and its href. Move that tail back out as plain text, matching the phone's link range.
+ */
+function trimAutolinkTails(node) {
+  if (Array.isArray(node)) {
+    node.forEach(trimAutolinkTails);
+    return;
+  }
+  if (!node || typeof node !== "object") return;
+  if (node.type === "link" && node.autolink) {
+    const trimmed = trimLinkTail(node.href);
+    if (trimmed !== node.href) {
+      const tail = node.href.slice(trimmed.length);
+      node.linkTail = tail;
+      node.href = trimmed;
+      // A `www.` autolink's label omits the scheme its href carries, so drop the same tail from
+      // the label instead of copying the href.
+      const label = (node.text ?? "").endsWith(tail)
+        ? node.text.slice(0, -tail.length)
+        : (node.text ?? "");
+      node.text = label;
+      const child = node.tokens?.[0];
+      if (child) child.text = label;
+    }
+  }
+  for (const key of ["tokens", "items", "rows", "header"]) {
+    if (node[key]) trimAutolinkTails(node[key]);
+  }
+}
+
+// CommonMark refuses to close `**` or `_` when punctuation comes right before the run and a
+// letter right after it, but Chinese prose ends the emphasised sentence with punctuation and
+// continues with a CJK letter exactly there, so marked printed `比如**中文。**不会` as raw
+// delimiters. Swap that following letter for an unused punctuation mark while lexing (same
+// length, so every source position stays exact), then put it back in the rendered HTML. The
+// ranges mirror AgoraMarkdownFlavour.isCjkPunctuation / isCjkLetter.
+const CJK_PUNCTUATION = "\u00B7\u2010-\u2027\u2030-\u205E\u3000-\u303F\uFE10-\uFE1F\uFE30-\uFE4F\uFF01-\uFF20\uFF3B-\uFF40\uFF5B-\uFF65";
+const CJK_LETTER = "\u3005-\u3007\u3040-\u30FF\u3400-\u4DBF\u4E00-\u9FFF\uAC00-\uD7AF\uF900-\uFAFF";
+const CJK_EMPHASIS_RUN = new RegExp(`([${CJK_PUNCTUATION}])(\\*+|_+)([${CJK_LETTER}])`, "g");
+// Supplemental Punctuation marks marked already classifies as punctuation, never in user text.
+const CJK_EMPHASIS_SENTINELS = Array.from({ length: 128 }, (_, index) => String.fromCharCode(0x2e00 + index))
+  .filter(char => /\p{P}/u.test(char));
+
+/** Equal-length rewrite for the lexer plus the map that turns the rendered HTML back. */
+function cjkEmphasisSource(text) {
+  const sentinelByLetter = new Map();
+  let next = 0;
+  const patched = text.replace(CJK_EMPHASIS_RUN, (match, punctuation, delimiters, letter) => {
+    let sentinel = sentinelByLetter.get(letter);
+    if (!sentinel) {
+      while (next < CJK_EMPHASIS_SENTINELS.length && text.includes(CJK_EMPHASIS_SENTINELS[next])) next++;
+      if (next >= CJK_EMPHASIS_SENTINELS.length) return match;
+      sentinel = CJK_EMPHASIS_SENTINELS[next++];
+      sentinelByLetter.set(letter, sentinel);
+    }
+    return punctuation + delimiters + sentinel;
+  });
+  if (!sentinelByLetter.size) return { text, restore: null };
+  const restore = new Map();
+  for (const [letter, sentinel] of sentinelByLetter) restore.set(sentinel, letter);
+  return { text: patched, restore };
+}
+
+/** The sentinels only ever come from cjkEmphasisSource, so the rendered HTML can swap in place. */
+function restoreCjkEmphasis(rendered, restore) {
+  if (!restore) return rendered;
+  const pattern = new RegExp(`[${[...restore.keys()].join("")}]`, "g");
+  return rendered.replace(pattern, char => restore.get(char));
+}
+
 // Nested lists indent 8 dp per level; style.css has one rule per level up to this depth.
 const MAX_LIST_DEPTH = 6;
 let listDepth = 0;
@@ -55,24 +177,34 @@ marked.use({
   renderer: {
     text(token) {
       if (token.tokens) return this.parser.parseInline(token.tokens);
-      return `<span ${sourceAttributes(token)}>${Renderer.prototype.text.call(this, token)}</span>`;
+      const body = token.escaped ? Renderer.prototype.text.call(this, token) : linkBarePaths(token.text);
+      return `<span ${sourceAttributes(token)}>${body}</span>`;
     },
     codespan(token) {
       return `<code ${sourceAttributes(token)}>${escapeHtml(token.text)}</code>`;
     },
     html: token => `<span ${sourceAttributes(token)} data-source-literal="true">${escapeHtml(token.text)}</span>`,
-    link({ href, title, tokens }) {
+    link({ href, title, tokens, linkTail }) {
       const label = this.parser.parseInline(tokens);
-      if (!SAFE_LINK.test(href)) return label;
+      const tail = linkTail ? escapeHtml(linkTail) : "";
+      if (!SAFE_LINK.test(href)) {
+        // A local image or video opens in the media viewer, as MarkdownLinkOpener does on the phone.
+        return linkedMediaType(href)
+          ? `<a href="#" class="markdown-file-link" data-media-link="${escapeHtml(href)}">${label}</a>${tail}`
+          : label + tail;
+      }
       const titleAttr = title ? ` title="${escapeHtml(title)}"` : "";
-      return `<a href="${escapeHtml(href)}"${titleAttr} target="_blank" rel="noopener noreferrer">${label}</a>`;
+      return `<a href="${escapeHtml(href)}"${titleAttr} target="_blank" rel="noopener noreferrer">${label}</a>${tail}`;
     },
     image(token) {
+      const card = videoCardTarget(token.href);
+      if (card) {
+        const label = token.text || card.split("/").pop();
+        return `<span class="markdown-video-slot" data-shell-video="${escapeHtml(card)}" data-video-label="${escapeHtml(label)}"></span>`;
+      }
       if (isMarkdownVideo(token.href)) {
         const label = escapeHtml(token.text || token.href);
-        return /^https?:\/\//i.test(token.href)
-          ? `<a class="markdown-video-link" href="${escapeHtml(token.href)}" target="_blank" rel="noreferrer">▶ ${label}</a>`
-          : `<span class="markdown-video-link">▶ ${label}</span>`;
+        return `<a class="markdown-video-link" href="${escapeHtml(token.href)}" target="_blank" rel="noreferrer">▶ ${label}</a>`;
       }
       if (!supportsImageSnapshot(token.href)) return Renderer.prototype.image.call(this, token);
       return `<span class="markdown-image-slot" data-shell-image="${escapeHtml(token.href)}" data-image-ordinal="${token.imageOrdinal}" data-image-label="${escapeHtml(token.text || "")}"></span>`;
@@ -116,24 +248,30 @@ const lineBreaks = (text) => text.split("\n").length - 1;
 function renderHtml(markdown, math, sourceMap = [], citations = [], streaming = false) {
   const positions = [];
   let source = "", boundary = 0, delta = 0;
-  for (let index = 0; index < markdown.length; index++) {
+  // Video lines and <video> tags become card nodes; positions keep pointing at the original text.
+  const embedded = embedVideos(markdown);
+  const input = embedded?.text ?? markdown;
+  const originOf = at => embedded ? embedded.origin[at] : at;
+  for (let at = 0; at < input.length; at++) {
+    let index = originOf(at);
     while (sourceMap[boundary]?.[0] <= index) {
       delta = sourceMap[boundary][1] - sourceMap[boundary][0];
       boundary++;
     }
-    const slot = markdown[index] === "\uE000" && markdown.slice(index).match(/^\uE000(\d+)\uE001/);
+    const slot = input[at] === "\uE000" && input.slice(at).match(/^\uE000(\d+)\uE001/);
     const display = slot && math?.[slot[1]]?.display;
     if (display) { source += "\n\n"; positions.push(index + delta, index + delta); }
-    source += markdown[index];
+    source += input[at];
     positions.push(index + delta);
     if (display) {
       for (let part = 1; part < slot[0].length; part++) {
-        index++;
+        at++;
+        index = originOf(at);
         while (sourceMap[boundary]?.[0] <= index) {
           delta = sourceMap[boundary][1] - sourceMap[boundary][0];
           boundary++;
         }
-        source += markdown[index];
+        source += input[at];
         positions.push(index + delta);
       }
       source += "\n\n"; positions.push(index + delta, index + delta);
@@ -151,7 +289,9 @@ function renderHtml(markdown, math, sourceMap = [], citations = [], streaming = 
     fragments.push(source.slice(start, index + 1));
     normalizedPositions.push(positions[start]);
   }
-  const tokens = marked.lexer(normalized);
+  const cjk = cjkEmphasisSource(normalized);
+  const tokens = marked.lexer(cjk.text);
+  trimAutolinkTails(tokens);
   let imageOrdinal = 0;
   function locate(tokens, raw, positions, fragments) {
     let cursor = 0;
@@ -176,7 +316,7 @@ function renderHtml(markdown, math, sourceMap = [], citations = [], streaming = 
       }
     }
   }
-  locate(tokens, normalized, normalizedPositions, fragments);
+  locate(tokens, cjk.text, normalizedPositions, fragments);
   let out = "";
   let breaks = 0;
   for (const token of tokens) {
@@ -191,7 +331,7 @@ function renderHtml(markdown, math, sourceMap = [], citations = [], streaming = 
   out += SPACER.repeat(breaks);
   // Expand only text nodes: source attributes must retain the original token verbatim.
   const template = document.createElement("template");
-  template.innerHTML = out;
+  template.innerHTML = restoreCjkEmphasis(out, cjk.restore);
   const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
   const nodes = [];
   while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -402,6 +542,7 @@ export function Markdown({ text, variant = "answer", wrap = true, search, matche
   const root = useRef(null);
   const previews = useRef(new Map());
   const images = useRef(new Map());
+  const videos = useRef(new Map());
   const imageOwner = useRef(null);
   const emptyNode = useRef(null);
   const showEmpty = streaming && !text.markdown.trim() && emptyStreamingText != null;
@@ -448,14 +589,18 @@ export function Markdown({ text, variant = "answer", wrap = true, search, matche
           existing.matches("[data-shell-image]") && incoming.matches("[data-shell-image]") &&
           existing.dataset.shellImage === incoming.dataset.shellImage && existing.dataset.imageLabel === incoming.dataset.imageLabel &&
           existing.dataset.imageOrdinal === incoming.dataset.imageOrdinal;
-        if (sameImage) incoming.remove();
+        const sameVideo = existing?.nodeType === Node.ELEMENT_NODE && incoming.nodeType === Node.ELEMENT_NODE &&
+          existing.matches("[data-shell-video]") && incoming.matches("[data-shell-video]") &&
+          existing.dataset.shellVideo === incoming.dataset.shellVideo &&
+          existing.dataset.videoLabel === incoming.dataset.videoLabel;
+        if (sameImage || sameVideo) incoming.remove();
         else if (samePreview) {
           const code = existing.querySelector("pre code"), freshCode = incoming.querySelector("pre code");
           for (const attribute of freshCode.attributes) code.setAttribute(attribute.name, attribute.value);
           incoming.remove();
         } else if (existing?.isEqualNode(incoming)) incoming.remove();
         else if (existing?.nodeType === Node.ELEMENT_NODE && incoming.nodeType === Node.ELEMENT_NODE &&
-          existing.tagName === incoming.tagName && existing.querySelector("[data-html-source],[data-shell-image]")) {
+          existing.tagName === incoming.tagName && existing.querySelector("[data-html-source],[data-shell-image],[data-shell-video]")) {
           reconcile(existing, incoming);
           incoming.remove();
         } else if (existing) existing.replaceWith(incoming);
@@ -468,6 +613,8 @@ export function Markdown({ text, variant = "answer", wrap = true, search, matche
     if (imageOwner.current !== owner) {
       for (const dispose of images.current.values()) dispose();
       images.current.clear();
+      for (const dispose of videos.current.values()) dispose();
+      videos.current.clear();
       imageOwner.current = owner;
     }
     reconcile(root.current, template.content);
@@ -483,7 +630,28 @@ export function Markdown({ text, variant = "answer", wrap = true, search, matche
     for (const node of root.current.querySelectorAll("[data-shell-image]")) {
       if (!images.current.has(node)) images.current.set(node, mountMarkdownImage(node, conversationId, messageId, sourceStart, imageDocument));
     }
+    for (const [node, dispose] of videos.current) {
+      if (!root.current.contains(node)) { dispose(); videos.current.delete(node); }
+    }
+    for (const node of root.current.querySelectorAll("[data-shell-video]")) {
+      if (!videos.current.has(node)) videos.current.set(node, mountMarkdownVideo(node, conversationId, messageId, sourceStart, imageDocument));
+    }
   }, [markup, conversationId, messageId, sourceStart, imageDocument]);
+  // Text links and bare paths to local images or videos open the phone-streamed media viewer.
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return undefined;
+    const open = event => {
+      const target = event.target.closest?.("[data-media-link]");
+      if (!target || !element.contains(target)) return;
+      if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openLinkedMedia(target.dataset.mediaLink, conversationId, messageId, imageDocument);
+    };
+    element.addEventListener("click", open);
+    element.addEventListener("keydown", open);
+    return () => { element.removeEventListener("click", open); element.removeEventListener("keydown", open); };
+  }, [conversationId, messageId, imageDocument]);
   const forceSource = !!search?.query.trim();
   useLayoutEffect(() => {
     for (const island of previews.current.values()) island.update(reduceMotion, forceSource);
@@ -493,6 +661,8 @@ export function Markdown({ text, variant = "answer", wrap = true, search, matche
     previews.current.clear();
     for (const dispose of images.current.values()) dispose();
     images.current.clear();
+    for (const dispose of videos.current.values()) dispose();
+    videos.current.clear();
   }, []);
   useLayoutEffect(() => {
     root.current.querySelectorAll("[data-citation-token]").forEach(button => {

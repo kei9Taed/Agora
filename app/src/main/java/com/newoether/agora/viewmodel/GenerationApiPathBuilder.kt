@@ -27,6 +27,16 @@ internal data class GenerationApiPath(
 
 internal fun interface GenerationToolDefinitionSource {
     fun definitions(context: GenerationContext): List<ToolDefinition>
+
+    /**
+     * Low Context Mode pays only for the two surfaces its composer still exposes: shell_list,
+     * shell_exec and file_view_image behind the shell switch, web_search and web_fetch behind the
+     * web-search switch. Every other tool family is dropped before pricing, dispatch and
+     * authorization, and the kept schemas use compact descriptions so the small window stays
+     * affordable.
+     */
+    fun minimalDefinitions(context: GenerationContext): List<ToolDefinition> =
+        definitions(context)
 }
 
 /**
@@ -47,25 +57,29 @@ internal class GenerationApiPathBuilder(
         withContext(Dispatchers.Default) {
             val config = request.config
             val definitions = if (config.lowContextModeEnabled) {
-                emptyList()
+                toolDefinitions.minimalDefinitions(request.context)
             } else {
                 toolDefinitions.definitions(request.context)
             }
             val includeAssistantReasoning =
-                !config.responsesApiEnabled &&
-                    config.thinkingEnabled &&
-                    (
-                        config.providerName == Constants.PROVIDER_DEEPSEEK ||
-                            com.newoether.agora.api.openai.isDeepSeekModel(config.modelId)
-                        ) &&
-                    definitions.isNotEmpty()
+                config.replayReasoningInHistory || (
+                    !config.responsesApiEnabled &&
+                        config.thinkingEnabled &&
+                        (
+                            config.providerName == Constants.PROVIDER_DEEPSEEK ||
+                                com.newoether.agora.api.openai.isDeepSeekModel(config.modelId)
+                            ) &&
+                        definitions.isNotEmpty()
+                    )
             val fixedTokenCost = if (config.requestResolver == null) {
                 ContextTokenEstimator.forModel(
                     config.modelId, com.newoether.agora.api.LocalModelRuntime::exactTokenCountOrNull,
                 ).estimateFixed(
                     systemPrompt = config.effectiveSystemPrompt,
                     tools = definitions,
-                    initialUserPrompt = config.initialUserPrompt,
+                    // The API-only invocation is materialized as a message of the path below,
+                    // so counting it here would bill it twice and shrink the history budget.
+                    initialUserPrompt = null,
                     codeExecutionEnabled = config.codeExecutionEnabled,
                     googleSearchEnabled = config.googleSearchEnabled,
                     openAiWebSearchEnabled = config.openAiWebSearchEnabled,
@@ -103,6 +117,7 @@ internal class GenerationApiPathBuilder(
                     // Undescribed images remain part of dispatch and context accounting.
                     includeImages = true,
                     includeAssistantReasoning = includeAssistantReasoning,
+                    replayReasoningInHistory = config.replayReasoningInHistory,
                     systemPrompt = config.effectiveSystemPrompt,
                     maxContextWindow = providerTokenBudget,
                     codeExecutionEnabled = config.codeExecutionEnabled,

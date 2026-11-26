@@ -443,7 +443,10 @@ Provider-name visibility is a separate preference keyed by the complete model ID
 custom model editor place a Show Provider name switch below the alias field. Save commits both values in one DataStore edit,
 while Cancel, Back and outside dismissal commit neither. Clearing or changing an alias never changes
 that switch. Complete-name surfaces append the current Provider name only when the preference is on;
-alias-only labels in Provider-grouped model lists retain their existing presentation.
+alias-only labels in Provider-grouped model lists retain their existing presentation. Until the owner
+touches that switch, a model under a custom Provider shows its Provider name and a model under a
+built-in remote or Local Provider does not; the new-custom-model form follows whichever Provider is
+picked there until the owner overrides it.
 
 The shared Provider-name switch row uses a white primary label, 8 dp of outer top spacing, and a
 16 dp rounded-rectangle clip around its toggleable ripple. The top gap is outside the hit region.
@@ -1650,6 +1653,10 @@ Message/detail bodies and real input/textarea content remain selectable; control
 nonselection must not disable their native selection, copy, focus or scrolling.
 The sign-in Brand and New Chat welcome use the native WebUI Settings `Icons.Default.Web` browser-window glyph.
 All image entries reuse the existing AttachmentViewer, including Tool images and PDF pages.
+On touch screens a quick, mostly horizontal single-finger flick changes the item (at least 48px
+sideways, under 800ms, and only while the picture is unzoomed, so a zoomed picture keeps its pan).
+The picture element survives an item change and the previous frame stays painted until the next
+source decodes, so switching never flashes an empty viewport or the loading spinner.
 The pinned Panzoom 4.6.0 runtime and its MIT license are bundled under webui/vendor, never fetched
 from a CDN. Panzoom owns pointer pan, focal wheel zoom and touch pinch inside a fixed clipped viewport.
 Double-click toggles 1x/3x around the pointer with Compose's non-bouncy medium-low spring
@@ -1688,6 +1695,14 @@ Authenticated same-origin reads resolve only that message's app-private media an
 browser path. Missing media shows a terminal unavailable thumbnail. The shared viewer opens the
 tapped occurrence. Streaming answer/code text uses draw-only time alpha (500 ms linear); the answer
 tail dot remains independent. Compact rows render their capsule regardless of legacy participant.
+Horizontally scrolling browser strips fade the edge that still hides content, matching the native
+attachment row and heatmap: a shared 24px mask covers the user attachment row, the composer
+attachment row, message KaTeX display blocks and any `.edge-fade-x` owner. `edge-fade.js` writes
+`--edge-fade-left`/`--edge-fade-right` from `scrollWidth`, `clientWidth` and `scrollLeft` (RTL
+included), and follows scroll, size changes and late loading through a `MutationObserver` and load
+listener. A strip whose content fits, or whose end is reached, keeps that edge at 0; both weights
+cross-fade in 200ms, and Reduced Motion keeps that fade like every other browser fade because it is
+draw-only and never changes layout or scroll extent.
 The shared browser DetailSheet uses SmoothBottomSheet's fraction spring (350, damping 0.9) for
 entry, anchor changes and retained exit. Scrim alpha is 0.32 times that same fraction. Its handle
 interrupts the spring; close returns focus only after the sheet reaches zero. Option labels use the

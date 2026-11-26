@@ -293,7 +293,7 @@ class LocalLlamaOwnershipSourceContractTest {
         val runtime = mainSource("com/newoether/agora/api/LocalModelRuntime.kt")
         val embeddingNative = mainCppSource("llama_jni.cpp")
         val chatSwitch = runtime.indexOf("unloadResident()")
-        val chatLoad = runtime.indexOf("LlamaChatEngine(identity.canonicalPath, identity.nCtx)")
+        val chatLoad = runtime.indexOf("LlamaChatEngine(identity.canonicalPath, identity.nCtx, identity.nThreads, identity.kvCacheType)")
         val chatFailure = runtime.indexOf("if (!loaded.load())", chatLoad)
         val chatInstall = runtime.indexOf("resident = Resident.Chat", chatFailure)
         val embeddingSwitch = runtime.indexOf("unloadResident()", chatSwitch + 1)
@@ -386,7 +386,7 @@ class LocalLlamaOwnershipSourceContractTest {
             "set(GGML_NATIVE OFF CACHE BOOL \"\" FORCE)",
             "set(GGML_BACKEND_DL ON CACHE BOOL \"\" FORCE)",
             "set(GGML_CPU_ALL_VARIANTS ON CACHE BOOL \"\" FORCE)",
-            "set(GGML_CPU_KLEIDIAI OFF CACHE BOOL \"\" FORCE)",
+            "set(GGML_CPU_KLEIDIAI ON CACHE BOOL \"\" FORCE)",
             "set(GGML_VULKAN OFF CACHE BOOL \"\" FORCE)",
             "set(GGML_OPENMP OFF CACHE BOOL \"\" FORCE)",
         ).forEach { assertTrue(cmake.contains(it)) }
@@ -550,8 +550,8 @@ class LocalLlamaOwnershipSourceContractTest {
         assertEquals(2048, legacyDefaults.nCtx)
         assertEquals(4096, legacyDefaults.maxTokens)
         val draft = LocalChatModelDraft(modelId = "model", modelPath = "/model.gguf")
-        assertEquals("16384", draft.nCtx)
-        assertEquals("1024", draft.maxTokens)
+        assertEquals("8192", draft.nCtx)
+        assertEquals("4096", draft.maxTokens)
         assertNull(draft.validate { false })
         assertEquals(
             LocalChatModelDraftError.OUTPUT_EXCEEDS_CONTEXT,
@@ -564,8 +564,8 @@ class LocalLlamaOwnershipSourceContractTest {
         assertTrue(settings.contains("draft.validate { id ->"))
         assertTrue(settings.indexOf("draft.validate { id ->") < settings.indexOf("addLocalChatModel(config)"))
         assertTrue(settings.indexOf("draft.validate { id ->") < settings.indexOf("updateLocalChatModel("))
-        assertTrue(onboarding.contains("nCtx = 16384"))
-        assertTrue(onboarding.contains("maxTokens = 1024"))
+        assertTrue(onboarding.contains("nCtx = 8192"))
+        assertTrue(onboarding.contains("maxTokens = 4096"))
         assertTrue(provider.contains(
             "minOf(config.maxContextWindow, modelConfig.nCtx).coerceAtLeast(1)"
         ))

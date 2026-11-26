@@ -32,14 +32,29 @@ class WebSearchFallbackPolicyTest {
     }
 
     @Test
-    fun attemptOrder_neverAddsCffiBridge_forOtherPrimaryProviders() {
+    fun attemptOrder_neverUsesCffiBridgeForOtherPrimaries() {
         val order = webSearchAttemptOrder(
             primary = "brave",
             apiKeys = mapOf("brave" to "key"),
             searxngBaseUrl = "",
             cffiAvailable = true,
         )
-        assertEquals(listOf("brave"), order)
+        // Brave answers first, DuckDuckGo is the keyless safety net, but the sandbox bridge is
+        // only offered for a DuckDuckGo primary run.
+        assertEquals(listOf("brave", "duckduckgo"), order)
+        assertTrue("duckduckgo_cffi" !in order)
+    }
+
+    @Test
+    fun attemptOrder_exaDefaultFallsBackToKeylessDuckDuckGo() {
+        assertEquals(
+            listOf("exa", "duckduckgo"),
+            webSearchAttemptOrder("exa", emptyMap(), "", false),
+        )
+        assertEquals(
+            listOf("exa", "duckduckgo", "duckduckgo_cffi"),
+            webSearchAttemptOrder("exa", emptyMap(), "", true),
+        )
     }
 
     @Test
@@ -70,7 +85,7 @@ class WebSearchFallbackPolicyTest {
             searxngBaseUrl = "https://searx.example",
             cffiAvailable = false,
         )
-        assertEquals(listOf("searxng", "kagi"), order)
+        assertEquals(listOf("searxng", "duckduckgo", "kagi"), order)
         assertEquals(order.distinct(), order)
     }
 

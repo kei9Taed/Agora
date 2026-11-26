@@ -22,7 +22,7 @@ import kotlinx.serialization.json.put
  * Keyless/local backends come first (no billing surprise), then keyed providers the user has
  * already configured. `duckduckgo_cffi` is only offered when the on-device sandbox can run it.
  */
-internal val WEB_SEARCH_FALLBACK_ORDER = listOf("searxng", "brave", "serper", "tavily", "exa", "kagi")
+internal val WEB_SEARCH_FALLBACK_ORDER = listOf("duckduckgo", "searxng", "brave", "serper", "tavily", "exa", "kagi")
 
 /**
  * Full attempt order for one `web_search` call.
@@ -43,6 +43,11 @@ internal fun webSearchAttemptOrder(
         when {
             provider == "searxng" -> if (searxngBaseUrl.isNotBlank()) add(provider)
             !apiKeys[provider].isNullOrBlank() -> add(provider)
+            // DuckDuckGo needs no key and no base URL, so an Exa default never dead-ends.
+            provider == "duckduckgo" -> {
+                add(provider)
+                if (cffiAvailable) add("duckduckgo_cffi")
+            }
         }
     }
 }

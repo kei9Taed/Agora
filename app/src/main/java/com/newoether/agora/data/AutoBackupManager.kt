@@ -153,21 +153,34 @@ class AutoBackupManager(
         val filename = "Agora_backup_${sdf.format(Date())}.agora"
 
         var result: DataExporter.ExportResult? = null
-        val written = target.write(filename) { uri ->
+        suspend fun writeWith(baselineFile: File?): Boolean = target.write(filename) { uri ->
             result = exporter.export(
                 uri = uri,
                 categories = categories,
                 includeApiKeys = includeApiKeys,
-                baselineFile = baseline,
+                baselineFile = baselineFile,
                 onProgress = {},
             )
+        }
+        val startedAt = System.currentTimeMillis()
+        val written = try {
+            writeWith(baseline)
+        } catch (damaged: BaselineDamagedException) {
+            // The partial file is already gone; rebuild everything instead of reusing bad bytes.
+            DebugLog.w("AutoBackup", "Baseline damaged, rebuilding without it: ${damaged.message}")
+            result = null
+            writeWith(null)
         }
         val export = result.takeIf { written }
         if (export == null) {
             sendFailureNotification("Failed to finalize backup file")
             return null
         }
-        DebugLog.d("AutoBackup", "Backup created")
+        DebugLog.d(
+            "AutoBackup",
+            "Backup created in ${System.currentTimeMillis() - startedAt} ms " +
+                "(baseline=${baseline != null})",
+        )
         return BackupOutcome(export, target)
     }
 
@@ -228,8 +241,12 @@ class AutoBackupManager(
 
         val cutoffTime = System.currentTimeMillis() - deletePeriodHours.toLong() * 3600_000L
 
+        // One backup always survives: an expired retention window must never empty the directory.
+        val kept = newestCompleteBackup(entries)?.name
+
         // Providers may withhold the modified time; such files are kept rather than guessed at.
         entries.filter { isCompleteBackupName(it.name) }
+            .filter { it.name != kept }
             .filter { entry -> entry.lastModified != null && entry.lastModified < cutoffTime }
             .forEach(target::delete)
     }

@@ -35,6 +35,12 @@ data class GenerationConfig(
     val effectiveSystemPrompt: String?,
     /** Optional API-only USER invocation appended to the initial Provider request. */
     val initialUserPrompt: String? = null,
+    /**
+     * Preserve-Context Compact: tools stay declared so the request prefix matches an ordinary
+     * turn, but every client tool call is answered with a refusal instead of being executed.
+     * Refused rounds live only in memory and never reach Room.
+     */
+    val rejectToolCalls: Boolean = false,
     val maxContextWindow: Int = ContextBudget.DEFAULT_TOKENS,
     val codeExecutionEnabled: Boolean,
     val googleSearchEnabled: Boolean,
@@ -66,6 +72,8 @@ data class GenerationConfig(
     val presencePenalty: Float? = null,
     /** Phone tool image budget frozen at Run admission; other image sources are unaffected. */
     val phoneMaxScreenshots: Int = com.newoether.agora.phone.PHONE_MAX_SCREENSHOTS_DEFAULT,
+    /** Send `reasoning_content` on every assistant turn, empty when none was stored (#198). */
+    val replayReasoningInHistory: Boolean = false,
 )
 
 /** Frozen automatic-Compact policy and provider access captured with one generation. */
