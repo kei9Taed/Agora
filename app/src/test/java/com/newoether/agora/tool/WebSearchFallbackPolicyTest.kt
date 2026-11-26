@@ -39,10 +39,10 @@ class WebSearchFallbackPolicyTest {
             searxngBaseUrl = "",
             cffiAvailable = true,
         )
-        // Brave answers first, DuckDuckGo is the keyless safety net, but the sandbox bridge is
-        // only offered for a DuckDuckGo primary run.
-        assertEquals(listOf("brave", "duckduckgo"), order)
-        assertTrue("duckduckgo_cffi" !in order)
+        // Brave answers first, then the keyless DuckDuckGo net; the sandbox bridge follows
+        // DuckDuckGo into the chain but never before the selected provider.
+        assertEquals(listOf("brave", "duckduckgo", "duckduckgo_cffi"), order)
+        assertEquals("brave", order.first())
     }
 
     @Test
