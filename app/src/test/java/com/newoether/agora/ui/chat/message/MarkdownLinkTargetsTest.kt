@@ -100,16 +100,60 @@ class MarkdownLinkTargetsTest {
     }
 
     @Test
-    fun videoSourcesStayInsideSandboxHomeOrRemainRemote() {
+    fun videoSourcesStayInsideSandboxHomeOrResolveToTheirConchDevice() {
         assertEquals(
             MarkdownVideoSource.Local(LocalFileTarget(LocalFileRoot.SANDBOX_HOME, "clips/a.mp4")),
             markdownVideoSource("shell://Local Sandbox/home/agora/clips/a.mp4"),
         )
         assertNull(markdownVideoSource("shell://Local Sandbox/etc/a.mp4"))
-        assertNull(markdownVideoSource("shell://Workstation/F:/out/a.mp4"))
         assertEquals(
-            MarkdownVideoSource.Remote("https://example.com/a.mp4"),
-            markdownVideoSource("https://example.com/a.mp4"),
+            MarkdownVideoSource.Conch("Workstation", "F:/out/a.mp4"),
+            markdownVideoSource("shell://Workstation/F:/out/a.mp4"),
         )
+        assertEquals(
+            MarkdownVideoSource.Conch("tinybox", "/home/newoether/clip.webm"),
+            markdownVideoSource("shell://tinybox/home/newoether/clip.webm"),
+        )
+        assertNull(markdownVideoSource("shell://tinybox/home/newoether/clip.png"))
+    }
+
+    @Test
+    fun remoteVideoCacheNameFollowsTheSourceContentHash() {
+        val hash = "ab".repeat(32)
+        assertEquals("$hash.mp4", markdownVideoCacheFileName(hash, "/tips/clip.mp4"))
+        assertEquals("$hash.webm", markdownVideoCacheFileName(hash, "/tips/clip.WEBM"))
+        assertEquals("$hash.mp4", markdownVideoCacheFileName(hash, "/tips/clip"))
+    }
+
+    @Test
+    fun linkTailStopsBeforeSentencePunctuationAndUnbalancedBrackets() {
+        fun kept(text: String): String = text.substring(0, trimLinkTail(text, 0, text.length))
+
+        assertEquals("https://github.com/x/y/releases/tag/v1.2.0", kept("https://github.com/x/y/releases/tag/v1.2.0)"))
+        assertEquals("https://github.com/x/y/releases/tag/v1.2.0", kept("https://github.com/x/y/releases/tag/v1.2.0）。"))
+        assertEquals("https://example.com/a", kept("https://example.com/a！"))
+        assertEquals("https://example.com/a", kept("https://example.com/a."))
+        assertEquals("https://example.com/a", kept("https://example.com/a]"))
+        assertEquals("https://en.wikipedia.org/wiki/Foo_(bar)", kept("https://en.wikipedia.org/wiki/Foo_(bar)"))
+        assertEquals("https://example.com/a", kept("https://example.com/a"))
+    }
+
+    @Test
+    fun linkAnnotationsDropTheTrailingBracketTheyDoNotOwn() {
+        val url = "https://github.com/x/y/releases/tag/v1.2.0"
+        val text = "见（$url）。"
+        val start = text.indexOf(url)
+        val annotated = AnnotatedString(
+            text,
+            annotations = listOf(
+                AnnotatedString.Range(LinkAnnotation.Url("$url）"), start, start + url.length + 1, "link"),
+            ),
+        )
+
+        val range = annotated.trimMarkdownLinkTail().getLinkAnnotations(start, start + url.length).single()
+
+        assertEquals(start, range.start)
+        assertEquals(start + url.length, range.end)
+        assertEquals(url, (range.item as LinkAnnotation.Url).url)
     }
 }

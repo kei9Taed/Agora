@@ -23,6 +23,24 @@ full glyph birth timeline. Stream-to-terminal settlement keeps the same message 
 Regression coverage uses the real message component to verify URI activation and equal message
 height with 48 trailing definitions, plus prepared and virtualized detail paths, split definitions,
 duplicates, reset, fenced literals, nested metadata and ordinary paragraph geometry.
+
+GFM ends a bare URL only at whitespace, so prose written right after it would join the link. A bare
+URL (native `bareUrlEnd`, WebUI `trimLinkTail`) ends at the first whitespace, general punctuation
+(U+2010–2027, U+2030–205E), CJK punctuation (U+3000–303F) or full-width ASCII punctuation; then
+trailing sentence marks and unbalanced closing brackets are trimmed, while balanced brackets such as
+`Foo_(bar)` stay. The text cut off renders as plain text. An explicit `[label](url)` keeps its label
+and loses only trailing punctuation from its destination.
+
+The browser follows the native file links where it can. A text link or bare path to a local
+image or video (`/home/agora/…`, shared storage, or `shell://Local%20Sandbox/home/agora/…`) opens
+the media viewer through `/api/markdown-files/{conversation}/{message}`. The phone admits a link only
+when the message document spells it as a whole token (`namesLinkDestination`), the root is readable,
+and the extension is png/jpg/jpeg/gif/webp/bmp/avif or a video container. SVG, other file types and
+other devices stay plain text, because a browser cannot hand a file to a local app. A line that is
+only a video destination and a `<video src>` element render as the video card, as
+`embedStandaloneVideoPaths`/`embedHtmlVideoTags` do natively (WebUI `embedVideos`); the video route
+admits them from the same rewrite of the whole document.
+
 The browser Compact detail uses the existing `DetailSheet` and `Markdown`, with authoritative
 running state, thought typography and App Reduced Motion passed into the shared renderer.
 The shared browser Markdown accepts an optional emptyStreamingText input. Compact passes the native
@@ -340,7 +358,10 @@ its own tool-row background status but is terminal for card-level generation pre
 The indicator uses an exact 2 dp stroke. Loading, brain, tool, and image icon changes all remain
 targets of the existing Crossfade; no active/static icon change is abrupt. During an active Thought,
 only an absent/default `Thinking...` title becomes a once-per-second localized live-duration label
-based on the latest snapshot. Live and terminal duration titles share one three-tier breakdown:
+based on the latest snapshot. The runtime measures thought time on a monotonic clock, so a
+running thought always publishes a positive duration and the label never degrades back to the
+static default while the card is live; a live snapshot that still lacks a duration counts from
+zero instead of hiding the label. Live and terminal duration titles share one three-tier breakdown:
 seconds below 60 seconds; minutes plus seconds below one hour; hours plus minutes plus seconds at or
 above one hour. Terminal tool-count variants use the same breakdown before their unchanged tool-count
 suffix. Provider titles and Tool/Transcription titles remain semantic. At every Provider-pass thought boundary, the runtime finishes
@@ -420,8 +441,10 @@ padding, increasing both presentations without a fixed or minimum height.
 
 The top-level Thinking segment bottom-sheet title uses the same shared semantic/live title resolver as
 its compact Thinking card, including default live `Thinking for Ns...`, Provider titles, Tool/
-Transcription titles, and terminal duration summaries. A selected detail page retains its own segment
-title. Sheet-list segment surfaces use a neutral translucent gray
+Transcription titles, and terminal duration summaries. The live counter resumes from the monotonic
+instant recorded with the published thought duration, so leaving and re-entering the chat does not
+restart it. A selected detail page retains its own segment title. Sheet-list segment surfaces use a
+neutral translucent gray
 `surfaceVariant.copy(alpha = 0.25f)` container with unchanged `onSurfaceVariant` text content.
 Thought, Tool, and Transcription leading icons use full `primary`; the trailing disclosure arrow
 uses neutral gray `onSurfaceVariant` at 0.5 alpha. Inline Timeline and compact Thinking palettes
@@ -516,6 +539,30 @@ video. Videos never consume an image
 ordinal, never enter `filesDir/markdown-media`, and are excluded from the native occurrence set that
 WebUI image reads use.
 
+WebUI renders the same parsed video destinations as the same play card and serves playback from an
+authenticated, same-origin route. A browser request names the owning conversation, message, document
+and parsed offset, and the destination must equal a parsed destination at or after that offset;
+prose, code and ordinary links never become a path. `shell://Local Sandbox` and the readable local
+roots resolve through the native sandbox resolver; any other Conch device streams through the
+authenticated file-transfer envelope in bounded chunks; SSH devices and unknown servers stay inert.
+The response carries the container MIME type, advertises `Accept-Ranges: bytes`, answers at most one
+byte range (200, or 206 with `Content-Range`; an unsatisfiable range gets 416 with `bytes */size`),
+treats a multipart or validator-bound request as a whole-file read, stops when the session ends and
+is never cached. The browser card matches `MarkdownVideoCard`: a 16:9, 16 px card on 55%
+surface-variant, the stream's first frame (metadata preload) as poster under a 28% black scrim, a
+centred 56 px play disc at 45% black and the destination file name at the bottom start. A tap opens
+the answer's media gallery (below) on that video; its page uses the browser's own video controls,
+whose bottom 72 px scrub instead of paging, and drops its loading veil once the first frame decodes.
+The WebUI viewer has no full-screen button of its own. Videos still consume no image ordinal, so the
+WebUI image route's occurrence set is unchanged.
+
+In native chat a tap on any Markdown picture or video card of one answer opens one media viewer over
+all of that answer's pictures and videos, ordered by their position on screen (top to bottom, then
+start to end), starting at the tapped one. A Conch video joins once its cached copy exists. Rows
+without this answer gallery (detail sheets, Remote) keep their previous viewer. The native video
+player offers a full-screen toggle in its control bar: it requests sensor landscape and hides the
+system bars, and leaving full screen or closing the player restores both.
+
 Markdown links are tappable in Agora-owned messages. `http://`, `https://` and `mailto:` leave
 through the platform handler. `/home/agora/…` and `shell://Local Sandbox/home/agora/…` resolve under
 the sandbox home; `/mnt/shared/…`, `/storage/emulated/0/…` and `/storage/self/primary/…` resolve to
@@ -547,7 +594,13 @@ Native chat provides the loader around its Markdown. WebUI serves authenticated,
 reads through the same store. A browser request identifies the owning conversation/message,
 document and image ordinal, and the destination must match that exact parsed occurrence; it cannot
 proxy arbitrary paths. Percent-encoded server names, POSIX and Windows paths retain native semantics.
-WebUI reserves the same square loading/failure viewport and opens AttachmentViewer on a loaded image.
+WebUI reserves the same square loading/failure viewport. Like the native answer gallery, a tap on a
+loaded image or a video card opens AttachmentViewer over every loaded image and every video card of
+the same message document in reading order, starting at the tapped one. The viewer pages one track
+inside its clipped viewport with both neighbours mounted (a neighbouring video waits as its glyph on
+black), so a drag or settle never exposes an empty side; a release pages past half a
+page or on a flick faster than 600 px/s toward the drag, and settles on the Compose pager spring
+(stiffness 400, damping ratio 1) from the release velocity.
 The bytes and receipts never enter Provider context, Room or the message graph; Remote sessions keep
 their own images.
 

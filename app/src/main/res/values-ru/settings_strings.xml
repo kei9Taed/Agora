@@ -164,6 +164,11 @@
     <string name="default_thinking">Размышление по умолчанию</string>
     <string name="gen_thinking_enabled">Размышление</string>
     <string name="gen_thinking_enabled_desc">Включить способность модели к размышлению/рассуждению</string>
+    <string name="replay_reasoning_in_history">Повторять рассуждения в истории</string>
+    <string name="replay_reasoning_in_history_desc">Отправлять reasoning_content в каждом сообщении ассистента; модели, требующие это поле, принимают пустое значение</string>
+    <string name="attachments_group_title">Вложения</string>
+    <string name="attachment_sandbox_link">Ссылки на файлы в песочнице</string>
+    <string name="attachment_sandbox_link_desc">Прикреплять файлы ссылками на песочницу, когда она доступна, иначе встраивать содержимое; выкл.: всегда встраивать</string>
     <string name="gen_thinking_level">Уровень размышления</string>
     <string name="gen_thinking_level_desc">Управляет глубиной размышления; выше = более тщательное рассуждение</string>
     <string name="gen_thinking_level_low">Низкий</string>
@@ -482,6 +487,17 @@
     <string name="provider_cache_desc">Запрашивать кэширование промптов; кэш ретранслятора независим</string>
     <string name="provider_cache_duration">Срок хранения кэша</string>
     <string name="provider_cache_duration_desc">Как долго можно повторно использовать кэшированные промпты</string>
+    <string name="provider_save_failed">Не удалось сохранить настройки провайдера</string>
+    <string name="provider_custom_entry_desc">Эндпоинт, совместимый с OpenAI, Anthropic или Google</string>
+    <string name="provider_remove_title">Убрать %1$s?</string>
+    <string name="provider_remove_text">Настройки сохранятся. Добавьте провайдера снова, чтобы восстановить их.</string>
+    <string name="provider_remove">Убрать</string>
+    <string name="provider_search_hint">Поиск провайдеров</string>
+    <string name="provider_custom_entry">Свой провайдер</string>
+    <string name="provider_add_no_match">Нет подходящих провайдеров</string>
+    <string name="provider_added">Добавлен</string>
+    <string name="provider_list_empty">Провайдеров пока нет</string>
+    <string name="provider_reorder">Изменить порядок</string>
     <!-- Network and service tier -->
     <string name="settings_group_network">Сеть</string>
     <string name="settings_proxy">Прокси</string>

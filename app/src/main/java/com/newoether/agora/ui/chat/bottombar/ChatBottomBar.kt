@@ -20,7 +20,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.input.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -50,6 +50,7 @@ import com.newoether.agora.model.ThinkingResolution
 import com.newoether.agora.util.Constants
 import com.newoether.agora.data.providerDisplayName
 import com.newoether.agora.data.modelDisplayName
+import com.newoether.agora.data.modelProviderNameShown
 import com.newoether.agora.ui.components.AgoraDropdownMenuItem
 import com.newoether.agora.ui.components.AgoraExposedDropdownMenu
 internal val CHAT_BOTTOM_BAR_OUTER_RADIUS = 28.dp
@@ -90,6 +91,8 @@ internal fun ChatBottomBar(
     modelAliases: Map<String, String> = emptyMap(),
     modelProviderNames: Map<String, Boolean> = emptyMap(),
     customProviders: List<CustomProviderConfig> = emptyList(),
+    /** User Provider list order; providers outside it (Local) sort after it. */
+    providerOrder: List<String> = emptyList(),
     codeExecutionEnabled: Boolean = false,
     googleSearchEnabled: Boolean = false,
     openAiWebSearchAvailable: Boolean = false,
@@ -105,6 +108,8 @@ internal fun ChatBottomBar(
     shellEnabled: Boolean = false,
     showLowContextMode: Boolean = false,
     lowContextModeEnabled: Boolean = false,
+    /** A local model whose chat template cannot express tools; its tool switches are greyed. */
+    selectedModelToolIncapable: Boolean = false,
     onCodeExecutionToggle: (Boolean) -> Unit = {},
     onGoogleSearchToggle: (Boolean) -> Unit = {},
     onOpenAiWebSearchToggle: (Boolean) -> Unit = {},
@@ -497,7 +502,7 @@ internal fun ChatBottomBar(
                 )
                 val capabilityControlsEnabled = !lowContextModeEnabled
                 val displayText = when {
-                    isModelValid -> modelDisplayName(selectedModel, modelAliases, customProviders, modelProviderNames[selectedModel] != false)
+                    isModelValid -> modelDisplayName(selectedModel, modelAliases, customProviders, modelProviderNameShown(selectedModel, modelProviderNames))
                     enabledModels.isNotEmpty() -> stringResource(R.string.select_model)
                     else -> stringResource(R.string.no_model_selected)
                 }
@@ -528,12 +533,21 @@ internal fun ChatBottomBar(
                             enabled = false
                         )
                     } else {
-                        // Grouped by provider, then alphabetical. enabledModels is a Set whose
-                        // iteration order is insertion order (i.e. whenever each model was
-                        // enabled), which scrambles providers together in the picker.
-                        val sortedModels = remember(enabledModels, customProviders) {
+                        // Grouped by provider in the user's Provider list order, then
+                        // alphabetical. enabledModels is a Set whose iteration order is insertion
+                        // order (i.e. whenever each model was enabled), which scrambles providers.
+                        val sortedModels = remember(enabledModels, customProviders, providerOrder) {
+                            val positions = providerOrder.withIndex().associate { (index, name) -> name to index }
                             enabledModels.sortedWith(
                                 compareBy(
+                                    {
+                                        positions[
+                                            providerDisplayName(
+                                                com.newoether.agora.model.ModelId.parse(it).providerName,
+                                                customProviders,
+                                            )
+                                        ] ?: Int.MAX_VALUE
+                                    },
                                     {
                                         providerDisplayName(
                                             com.newoether.agora.model.ModelId.parse(it).providerName,
@@ -546,7 +560,7 @@ internal fun ChatBottomBar(
                         }
                         sortedModels.forEach { model ->
                             ComposerModelMenuItem(
-                                displayText = modelDisplayName(model, modelAliases, customProviders, modelProviderNames[model] != false),
+                                displayText = modelDisplayName(model, modelAliases, customProviders, modelProviderNameShown(model, modelProviderNames)),
                                 selected = model == selectedModel,
                                 onClick = {
                                     haptics.selection()
@@ -595,7 +609,7 @@ internal fun ChatBottomBar(
                         }, 
                         modifier = Modifier.size(32.dp).menuAnchor(type = ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
                     ) {
-                        Icon(Icons.Default.MoreVert, stringResource(R.string.tools), modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Rounded.MoreVert, stringResource(R.string.tools), modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     
                     AgoraExposedDropdownMenu(
@@ -642,6 +656,7 @@ internal fun ChatBottomBar(
                             showShell = showShell,
                             shellEnabled = shellEnabled,
                             onShellToggle = onShellToggle,
+                            toolControlsEnabled = !selectedModelToolIncapable,
                             canCompact = canCompact,
                             isCompacting = isCompacting,
                             onCompactClick = onCompactClick,

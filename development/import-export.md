@@ -162,6 +162,18 @@ format, or structurally invalid is rejected before writing and the export falls 
 current-version archive. Writing goes to a `.tmp` file and is published by an atomic rename; failure
 or cancellation deletes the temporary file and never disturbs existing backups.
 
+Export records the CRC32 of every conversation item's and media entry's stored (compressed) bytes in
+the optional `conv/raw_crc.json` entry. A reused baseline entry that has a recorded checksum is not
+decompressed: its stored bytes are checksummed while they are raw-copied, and a mismatch aborts the
+export, after which the automatic backup rebuilds the whole archive without a baseline. Entries
+without a recorded checksum (archives written before this entry existed) are still fully inflated
+and checked against their ZIP size and CRC before reuse. Item entries are deflated at level 3 into a
+scratch file in the application cache and added as raw entries with known sizes. Media is already
+compressed, so it is added as stored entries: a first read of the source yields the declared size
+and CRC, and the copy is checked against them, failing the export if the source changed in between.
+The media pass skips decoding message rows that contain none of `"images":`, `"attachmentMeta":`, or
+`toolImages`. Importers treat `conv/raw_crc.json` as ordinary small metadata and do not need it.
+
 Import normalizes both shapes to one graph view before any mutation: version 1-4 streams
 `conversations.json` directly, while version 5+ merges index, items, and tasks into one temporary
 spool file in the application cache. The spool is deleted when the source closes, including failure
@@ -188,7 +200,7 @@ The following JSON field names are the complete current portable allowlist.
 | Language, Web Search, and image generation | `appLanguage`, `webSearchEnabled`, `webSearchProvider`, `webSearchNumResults`, `webSearchBaseUrl`, `imageGenEnabled`, `imageGenModel`, `imageGenSize`, `autoUpdateCheck` |
 | Image quality | `imageQualityMode`, `imageQualityMaxLongEdge`, `imageQualityJpegQuality` |
 | Image transcription | `imageTranscriptionEnabled`, `imageTranscriptionEnabledModels`, `imageTranscriptionModel`, `imageTranscriptionBatchSize`, `imageTranscriptionPrompt` |
-| Shell, automation, custom Providers, and MCP | `shellEnabled`, `shellConfirmEnabled`, secret-free `shellDevices`, `automationToolsEnabled`, `exactExecutionEnabled`, `customProviders`, secret-free `mcpServers` |
+| Shell, automation, custom Providers, and MCP | `shellEnabled`, `shellConfirmEnabled`, secret-free `shellDevices`, `automationToolsEnabled`, `exactExecutionEnabled`, `customProviders`, `providerList`, `hiddenProviderModels`, secret-free `mcpServers` |
 | Proxy | `proxyEnabled`, `proxyType`, `proxyHost`, `proxyPort`, `proxyUsername`, `proxyBypass` |
 | Appearance | `showDocumentationFab`, `themeMode`, `amoledEnabled`, `colorScheme`, `dynamicColor`, `blurEffectsEnabled`, `reduceMotion`, `stickToBottom`, `parseInlineDollarMath`, `hapticsEnabled`, `detailedTokenUsage`, `toolCallDisplayMode`, `thinkingSegmentDisplayMode`, `autoExpandActiveGroup`, `schemeStyle` |
 | Custom font | `fontPreference`; `customFontName` only when `custom_font/font` is included. The device file path is never portable. |
@@ -263,6 +275,15 @@ configured local set; explicit null does not erase local configuration. REPLACE 
 older missing fields restore an effectively empty candidate list and no recommendation. Restoring an explicitly
 empty set under REPLACE keeps it empty. Existing children and their model IDs are never rewritten by
 these global preferences.
+
+`providerList` is the ordered list of built-in remote and custom Provider names shown on the
+Providers page; `hiddenProviderModels` maps an unlisted built-in to its parked enabled model IDs.
+Both restore after `customProviders`, with names passed through the custom Provider rename map and
+model IDs through the ordinary model remap. REPLACE clears both keys; an archive without
+`providerList` then derives it from the legacy rule (built-ins with a key or, for Ollama, a Base URL,
+plus every custom). MERGE appends imported entries missing from the current order, and an absent
+field keeps the current list. Only built-in names are accepted as parked keys. A parked set whose
+built-in ends up listed returns to `enabledModels`; enabled models of every unlisted built-in are parked.
 
 `toolCallDisplayMode` writes only `timeline` or `grouped_timeline` (default). Legacy `compact`
 imports normalize to `grouped_timeline` through the ordinary Settings write in both MERGE and REPLACE.

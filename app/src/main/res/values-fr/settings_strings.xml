@@ -164,6 +164,11 @@
     <string name="default_thinking">Réflexion par défaut</string>
     <string name="gen_thinking_enabled">Réflexion</string>
     <string name="gen_thinking_enabled_desc">Activer la capacité de réflexion/raisonnement du modèle</string>
+    <string name="replay_reasoning_in_history">Rejouer le raisonnement dans l\'historique</string>
+    <string name="replay_reasoning_in_history_desc">Envoyer reasoning_content à chaque message de l\'assistant ; les modèles qui exigent ce champ acceptent une valeur vide</string>
+    <string name="attachments_group_title">Pièces jointes</string>
+    <string name="attachment_sandbox_link">Liens de fichiers sandbox</string>
+    <string name="attachment_sandbox_link_desc">Joint les fichiers sous forme de liens sandbox quand c\'est possible, sinon intègre leur contenu ; désactivé : toujours intégrer</string>
     <string name="gen_thinking_level">Niveau de réflexion</string>
     <string name="gen_thinking_level_desc">Contrôle la profondeur de réflexion ; plus élevé = raisonnement plus approfondi</string>
     <string name="gen_thinking_level_low">Faible</string>
@@ -482,6 +487,17 @@
     <string name="provider_cache_desc">Demander la mise en cache des prompts ; le cache du relais est indépendant</string>
     <string name="provider_cache_duration">Durée du cache</string>
     <string name="provider_cache_duration_desc">Durée pendant laquelle les prompts en cache restent réutilisables</string>
+    <string name="provider_save_failed">Impossible d\'enregistrer les paramètres du fournisseur</string>
+    <string name="provider_custom_entry_desc">Point de terminaison compatible OpenAI, Anthropic ou Google</string>
+    <string name="provider_remove_title">Retirer %1$s ?</string>
+    <string name="provider_remove_text">La configuration est conservée. Ajoutez-le à nouveau pour la restaurer.</string>
+    <string name="provider_remove">Retirer</string>
+    <string name="provider_search_hint">Rechercher des fournisseurs</string>
+    <string name="provider_custom_entry">Fournisseur personnalisé</string>
+    <string name="provider_add_no_match">Aucun fournisseur correspondant</string>
+    <string name="provider_added">Ajouté</string>
+    <string name="provider_list_empty">Aucun fournisseur pour le moment</string>
+    <string name="provider_reorder">Réorganiser</string>
     <!-- Network and service tier -->
     <string name="settings_group_network">Réseau</string>
     <string name="settings_proxy">Proxy</string>

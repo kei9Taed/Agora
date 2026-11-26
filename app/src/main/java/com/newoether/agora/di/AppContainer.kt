@@ -83,6 +83,12 @@ class AppContainer(
             }
     )
 
+    init {
+        // Every Provider request reports its usage here once it ends; start the writer before
+        // any generation can run. The DAO is resolved lazily so startup does not open the database.
+        com.newoether.agora.data.UsageRecorder.initialize({ database.usageLedgerDao() }, appScope)
+    }
+
     // ── Data Layer ────────────────────────────────────────────
 
     val settingsManager: SettingsManager by lazy { SettingsManager(appContext) }
@@ -424,8 +430,8 @@ class AppContainer(
             phoneReady = { PHONE_USE_SUPPORTED && phoneUse.readiness(it) },
             onConversationOpened = subagentManager::conversationOpened,
             onConversationIdle = subagentManager::conversationIdle,
-            onConfirmShellCommand = { server, summary, conversationId, detail ->
-                shellConfirmationController.confirm(server, summary, conversationId, detail)
+            onConfirmShellCommand = { server, summary, conversationId, detail, description ->
+                shellConfirmationController.confirm(server, summary, conversationId, detail, description)
             },
             registry = conversationStateRegistry,
             providerRegistry = providerRegistry,
@@ -460,6 +466,18 @@ class AppContainer(
             sandbox = { sandboxManagerFactory?.takeIf { it.isAvailable() }?.create() },
             scope = appScope,
         )
+        val loadWebUiMessage: suspend (String, String) -> com.newoether.agora.model.ChatMessage? =
+            { conversationId, messageId ->
+                val persisted = conversationRepository.getMessagesByIds(listOf(messageId))
+                    .any { it.id == messageId && it.conversationId == conversationId }
+                if (persisted) conversationStateRegistry.get(conversationId)?.generationSnapshot?.value
+                    ?.streamingMessage?.takeIf { it.id == messageId }
+                    ?: com.newoether.agora.viewmodel.ConversationMessagePayloadHydration(
+                        conversations = conversationRepository,
+                        appContext = appContext,
+                    ).loadMessages(conversationId, listOf(messageId)).singleOrNull()
+                else null
+            }
         WebUiController(
             appContext = appContext,
             store = WebUiSettingsStore(appContext.dataStore),
@@ -480,17 +498,12 @@ class AppContainer(
                 directory = java.io.File(appContext.filesDir, "tool-media"),
                 attachmentDirectory = appContext.filesDir,
                 markdownImage = previewMedia::previewImage,
-                loadMessage = { conversationId, messageId ->
-                    val persisted = conversationRepository.getMessagesByIds(listOf(messageId))
-                        .any { it.id == messageId && it.conversationId == conversationId }
-                    if (persisted) conversationStateRegistry.get(conversationId)?.generationSnapshot?.value
-                        ?.streamingMessage?.takeIf { it.id == messageId }
-                        ?: com.newoether.agora.viewmodel.ConversationMessagePayloadHydration(
-                            conversations = conversationRepository,
-                            appContext = appContext,
-                        ).loadMessages(conversationId, listOf(messageId)).singleOrNull()
-                    else null
-                },
+                loadMessage = loadWebUiMessage,
+            ),
+            markdownVideos = com.newoether.agora.webui.WebUiMarkdownVideos(
+                context = appContext,
+                devices = { settingsRepository.shellDevices.value },
+                loadMessage = loadWebUiMessage,
             ),
             htmlPreviewImage = { previewMedia.previewImage(it) },
         )
@@ -521,7 +534,12 @@ class AppContainer(
                     uploadDirectory = appContext.filesDir,
                     compactFailureMessage = { com.newoether.agora.viewmodel.compactFailureMessage(appContext, it) },
                     onConversationOpened = chatRuntime.onConversationOpened,
-                    allowLocalSandbox = { sandboxManagerFactory?.isAvailable() == true && settingsRepository.sandboxEnabled.value },
+                    allowLocalSandbox = {
+                        sandboxManagerFactory?.isAvailable() == true &&
+                            settingsRepository.sandboxEnabled.value &&
+                            settingsRepository.attachmentMode.value ==
+                                com.newoether.agora.util.Constants.ATTACHMENT_MODE_SANDBOX_LINK
+                    },
                     sandboxHomeDir = { sandboxManagerFactory?.takeIf { it.isAvailable() }?.let { java.io.File(appContext.filesDir, "sandbox-home") } },
                 )
             },
@@ -542,7 +560,12 @@ class AppContainer(
                 compactEnabled = settingsRepository.contextCompactEnabled,
             ),
             search = { query ->
-                if (settingsRepository.manualSearchMethod.value == com.newoether.agora.util.Constants.SEARCH_METHOD_RAG) {
+                // A stored semantic method may outlive its embedding model; only use it while a
+                // model is actually active, otherwise the drawer falls back to keyword results.
+                val semantic = settingsRepository.manualSearchMethod.value ==
+                    com.newoether.agora.util.Constants.SEARCH_METHOD_RAG &&
+                    chatRuntime.ragManager.activeEmbeddingModel.value != null
+                if (semantic) {
                     com.newoether.agora.viewmodel.SemanticSearchService(
                         settings = settingsRepository,
                         activeEmbeddingConfig = { chatRuntime.ragManager.activeEmbeddingModel.value },

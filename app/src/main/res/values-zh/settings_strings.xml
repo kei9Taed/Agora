@@ -177,6 +177,11 @@
     <string name="default_thinking">默认思考</string>
     <string name="gen_thinking_enabled">思考</string>
     <string name="gen_thinking_enabled_desc">启用模型思考/推理能力</string>
+    <string name="replay_reasoning_in_history">历史中回放思考</string>
+    <string name="replay_reasoning_in_history_desc">每条助手消息都发送 reasoning_content；要求该字段的模型可接受空值</string>
+    <string name="attachments_group_title">附件</string>
+    <string name="attachment_sandbox_link">沙箱文件链接</string>
+    <string name="attachment_sandbox_link_desc">可用时将文件以沙箱链接附着，不可用时自动改为内嵌内容；关闭则始终内嵌</string>
     <string name="gen_thinking_level">思考深度</string>
     <string name="gen_thinking_level_desc">控制思考深度；越高推理越深入</string>
     <string name="gen_thinking_level_minimal">极低</string>
@@ -499,6 +504,17 @@
     <string name="provider_cache_desc">请求缓存提示词；中转服务的缓存独立控制</string>
     <string name="provider_cache_duration">缓存时长</string>
     <string name="provider_cache_duration_desc">已缓存提示词可复用的时间</string>
+    <string name="provider_save_failed">保存提供商设置失败</string>
+    <string name="provider_custom_entry_desc">兼容 OpenAI、Anthropic 或 Google 的端点</string>
+    <string name="provider_remove_title">移除 %1$s？</string>
+    <string name="provider_remove_text">配置会保留，重新添加即可恢复。</string>
+    <string name="provider_remove">移除</string>
+    <string name="provider_search_hint">搜索提供商</string>
+    <string name="provider_custom_entry">自定义提供商</string>
+    <string name="provider_add_no_match">没有匹配的提供商</string>
+    <string name="provider_added">已添加</string>
+    <string name="provider_list_empty">还没有提供商</string>
+    <string name="provider_reorder">调整顺序</string>
     <!-- Network and service tier -->
     <string name="settings_group_network">网络</string>
     <string name="settings_proxy">代理</string>

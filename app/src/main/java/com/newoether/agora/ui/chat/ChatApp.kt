@@ -14,7 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -98,6 +98,7 @@ fun ChatApp(
     val isLoading by viewModel.isLoading.collectAsState()
     val isCompacting by viewModel.compactUi.isCompacting.collectAsState()
     val compactModel by viewModel.settings.contextCompactModel.collectAsState()
+    val compactPreserveContext by viewModel.settings.contextCompactPreserveSystemPrompt.collectAsState()
     val compactPrompt by viewModel.settings.contextCompactPrompt.collectAsState()
     val compactRetainCount by viewModel.settings.contextCompactRetainCount.collectAsState()
     val compactThresholdPercent by viewModel.settings.contextCompactThresholdPercent.collectAsState()
@@ -115,6 +116,13 @@ fun ChatApp(
     val generationSnapshot by viewModel.generationSnapshot.collectAsState()
     val selectedConversationGenerationSnapshot by viewModel.selectedConversationGenerationSnapshot.collectAsState()
     val selectedModel by viewModel.currentActiveModel.collectAsState()
+    val localToolIncapableModels by viewModel.settings.localToolIncapableModels.collectAsState()
+    // A local model whose template dropped tools gets its composer tool switches greyed (#218).
+    val selectedModelToolIncapable = remember(selectedModel, localToolIncapableModels) {
+        val parsed = com.newoether.agora.model.ModelId.parse(selectedModel)
+        parsed.providerName == com.newoether.agora.util.Constants.PROVIDER_LOCAL &&
+            parsed.modelName in localToolIncapableModels
+    }
     val enabledModels by viewModel.settings.enabledModels.collectAsState()
     val developerOptionsEnabled by viewModel.settings.developerOptionsEnabled.collectAsState()
     val debugModelEnabled by viewModel.settings.debugModelEnabled.collectAsState()
@@ -138,6 +146,7 @@ fun ChatApp(
     val isTransitioningToNewChat by viewModel.isTransitioningToNewChat.collectAsState()
     val visualizeContextRollout by viewModel.settings.visualizeContextRollout.collectAsState()
     val customProviders by viewModel.settings.customProviders.collectAsState()
+    val providerList by viewModel.settings.providerList.collectAsState()
     val displayConversations = remember(conversations, customProviders) { conversations.orEmpty().map { it.forDisplay(customProviders) } }
     val displayMessagesState = remember(messagesState, customProviders) { derivedStateOf { messagesState.value.map { it.forDisplay(customProviders) } } }
     val webSearchApiKeys by viewModel.settings.webSearchApiKeys.collectAsState()
@@ -278,6 +287,7 @@ fun ChatApp(
     val composer = com.newoether.agora.ui.chat.bottombar.rememberChatComposerState(
         sandboxEnabled = { viewModel.sandboxAttachmentReady },
         isSandboxFlavor = viewModel.isSandboxFlavor,
+        attachmentMode = { viewModel.settings.attachmentMode.value },
     )
     val inputFocusRequester = remember { FocusRequester() }
     var showLaunchContent by remember { mutableStateOf(false) }
@@ -688,6 +698,7 @@ fun ChatApp(
                         modelAliases = chatModelAliases,
                         modelProviderNames = modelProviderNames,
                         customProviders = customProviders,
+                        providerOrder = providerList,
                         codeExecutionEnabled = conversationControls.codeExecutionEnabled,
                         googleSearchEnabled = conversationControls.googleSearchEnabled,
                         thinkingEnabled = conversationControls.thinkingEnabled, thinkingLevel = conversationControls.thinkingLevel,
@@ -712,6 +723,7 @@ fun ChatApp(
                         onShellToggle = { enabled -> haptics.toggle(enabled); viewModel.updateConversationSetting(conversationControls.settingsOwnerId) { it.copy(shellEnabled = enabled) } },
                         showLowContextMode = conversationControls.showLowContextMode,
                         lowContextModeEnabled = conversationControls.lowContextModeEnabled,
+                        selectedModelToolIncapable = selectedModelToolIncapable,
                         onLowContextModeToggle = { enabled ->
                             haptics.toggle(enabled)
                             viewModel.updateConversationSetting(conversationControls.settingsOwnerId) {
@@ -777,6 +789,7 @@ fun ChatApp(
         modelAliases = chatModelAliases, customProviders = customProviders,
         modelProviderNames = modelProviderNames,
         isCompacting = isCompacting,
+        preserveContext = compactPreserveContext,
     )
 
     ChatForkConfirmationHost(pendingForkRequest, viewModel) { pendingForkRequest = null }

@@ -64,9 +64,10 @@ layout, states, density, or interaction design has been approved.
 - Advanced contains a whole-row Cache Switch. Only while enabled, a following Cache Duration
   SettingsItem shows the selected 5m or 1h value and opens the existing Appearance-style dropdown,
   including its selected-item checkmark. Reuse the shared group, item, icon, description, and motion
-  conventions; do not replace the choice with segmented buttons or add a separate Save action.
+  conventions; do not replace the choice with segmented buttons.
 - Existing and newly created Provider configurations default to Cache enabled and duration 1h.
-  Changes apply and persist immediately per Provider. Disabling retains the selected duration;
+  Changes are part of the Provider detail draft and persist only on its explicit Save (see Provider
+  list and remote detail editor). Disabling retains the selected duration;
   re-enabling restores it. Changing a custom Provider's protocol hides and ignores these controls
   without erasing their stored values.
 - Cache controls only Agora's Anthropic request marker: disabled omits the entire top-level
@@ -107,6 +108,13 @@ applies immediately and does not start a download. Once the selected system is r
 its installed dashboard, with its own version, packages and quick-install suggestions. A completed
 reset returns to the setup rows. There is no Save action.
 
+The Upgrade action on an installed dashboard and the not-installed Install action fade once
+between their enabled and disabled paints when their state switches: the `primary` fill and its
+`onPrimary` label cross to the component's ordinary disabled colors, and back on re-enable, over
+200 ms. The fade runs only on a state switch, never as a loop; the first composition starts
+settled, so opening the page has no color motion. Color feedback remains under Reduced Motion.
+No second button style, border, or moving gradient appears.
+
 Changing distribution clears stale operation output and package projections. Installation and
 package work disable selection; the backend also refuses a switch while shell jobs or filesystem
 mutations are active. A refused switch leaves the persisted selection unchanged and reports why.
@@ -138,6 +146,114 @@ and the separate home directory, including attachments. It does not follow symbo
 `/mnt/shared`. Show the used size only; there is no enforced 2 GiB sandbox quota, capacity denominator
 or quota progress bar. Refresh on page entry and after package/backend operations settle. This is
 a best-effort file-size snapshot, not allocated filesystem blocks or a live storage meter.
+
+## Data Control Storage page
+
+Owner-approved (2026-11-21). Data Control's first group gains a third row, Storage, which opens a
+full-screen secondary page (`SettingsStoragePage`) through the same guarded transition and Back
+handling as other Settings sub-pages.
+
+Revised 2026-11-22 (owner-approved): segmented bar, cached scan, in-card loading.
+
+- **Total group.** One card: the summed size in large bold type, a segmented bar and one legend row
+  per owner. The bar and legend reuse the context-composition style (`SegmentedBar`, `LegendRow`:
+  12dp bar, 2dp gaps, 4dp minimum segment, `surfaceVariant` track, 400ms motion-aware animation;
+  legend rows are dot, label, right-aligned value). Segment colors come from the theme
+  (`statsSegmentColors()`), never fixed values. Owners: Database (`agora_db` plus
+  `-wal`/`-shm`/`-journal`), Attachments (top-level `att_`/`vid_`/`img_`/`pdf_` files, the `images`,
+  `run-inputs`, `fork-attachments`, `tool-media`, `attachments`, `markdown-media` directories and
+  `sandbox-home/attachments`), Local models (top-level `*.gguf`), Sandbox (every `*-rootfs` plus
+  `sandbox-home`, minus its attachments so no byte is counted twice) and Temporary Files
+  (`cacheDir`: export spools, shared copies and media previews). RAG embeddings are database rows
+  and appear as the per-conversation Embeddings legend, never here. An export spool left behind by a
+  killed export is deleted at the start of the next export once it is over an hour old.
+- **Conversations group.** A Size/Messages `PillTabSwitcher` above the rows picks the order: Size
+  keeps the report order (total size, largest first), Messages orders by message count with size and
+  then id as tie-breakers; the choice is saved with the page. A "Sort by" row opens the card stack
+  and looks like any other item: the `Sort` leading icon in primary, the title on the headline line,
+  and the two pills (40dp, 6dp under the title) on the supporting line. The control lines up with
+  the rows it orders, every locale fits, and the bare nouns read as an order rather than a filter.
+  Top-level conversations only; subagent children (any depth, cycle-safe) roll into their root.
+  Each row shows title, message count (prefixed with the Task label for task executions) and
+  total size, plus a chevron at the end that points down while the row is expanded and up while it
+  is collapsed. Tapping expands a per-conversation segmented bar with Text, Tool calls,
+  Attachments, Embeddings and Metadata legend rows. The rows are lazy: the page is a `LazyColumn`
+  that composes only the rows on screen, so a long conversation list scrolls without composing
+  all of it; the page keeps the saved Settings scroll state.
+- **Multi-select.** Long-press toggles selection and enters selection mode: the title becomes the
+  selected count, checkboxes appear, taps toggle, Back clears. Each leading checkbox expands
+  horizontally out of the row edge with a fade (200ms in, 150ms out; instant when motion is
+  disabled), and a long press starts the same transition. The checkbox and its 16dp gap live inside
+  that animation, so a row without selection keeps the plain 16dp start padding. Delete reuses
+  `ChatDeleteConfirmDialog` and `ChatViewModel.deleteConversation`, one conversation at a time. While
+  it runs the dialog shows a determinate progress bar and `done/total`. Conversations that fail stay
+  selected and the dialog moves to its failed state so the user can retry.
+- **Loading.** No page-level progress bar and no counting indicator. While a scan runs the total
+  figure and each legend value cross-fade (200ms, `StatsLoadingValue`) into the same shimmering
+  placeholder block the conversation rows use, and the bar, the legend and the rows keep the previous
+  report dimmed (alpha 0.45). With no previous report the same block stands in for the total and the
+  list shows three placeholder rows.
+- **Computation.** `StorageUsageCalculator` runs grouped read-only SQL (`StorageUsageDao`) plus
+  file walks that never follow symbolic links, off the main thread. Image files referenced by
+  several messages of one conversation count once for it. Per-conversation message figures are
+  cached in `noBackupFilesDir/storage-usage.json` with the conversation's `dataChangedAt`; a scan
+  rescans message rows only for conversations whose watermark moved (batches of 500 IDs).
+  Embeddings, managed attachment directories and the owner breakdown are measured on every scan.
+  The persisted report is shown first on entry. Sizes are logical byte lengths, not allocated blocks.
+
+## Usage page
+
+Owner-approved (2026-11-21). Settings' Memory & Data group gains Usage (`"usage"`,
+`SettingsUsagePage`) right after Data Control.
+
+Revised 2026-11-22 (owner-approved): request ledger, statistics-card layout, in-card loading.
+
+- **Activity group.** The group title sits outside the card. A Tokens/Requests `PillTabSwitcher`
+  (the same two-pill component as the period switcher) sits above a 53-week dot heatmap (columns are
+  weeks starting on the locale's first day of week, scrolled to today, month labels above, weekday
+  labels on alternate rows). The scrolled weeks fade at both ends through the same edge mask as the
+  attachment row, so a half-visible column never looks cut off. Tokens is the default; while a count
+  runs, the counting row trails the caption on the heatmap footer line, so fading it in never
+  shifts the date sideways.
+  Five shades: zero, then quartiles of the non-zero days, so one heavy day does not flatten the
+  rest. Tapping a dot shows its date and value below; the picked dot is drawn as a contrasting
+  collar with a smaller value dot inside it, and today is outlined. A tab switch holds the current
+  shades until the count settles, then fades every dot to its new shade (240ms, instant when motion
+  is disabled), so the calendar never animates against figures that are still being recounted and
+  never repaints in one frame.
+- **Overview group.** Two-column `StatsCardGrid`: total tokens, requests, current streak, longest
+  streak. No cost figures.
+- **Tokens group.** A 7/30/90/All `PillTabSwitcher` under the "Token Statistics" title selects the
+  period for the cards below it (input, output, cached input, cache hit rate as cached over reported
+  input, `—` when nothing was reported), the bar chart and the "Tokens per Model" group. Seven days
+  is the default. Changing the period cross-fades the chart in 200ms (instant when motion is
+  disabled), because the bars, the date labels and the scroll range all change at once. The bar
+  chart keeps one bar per day for every period and never bins days into weeks. Thirty days is the
+  widest span that fits the plot, so 90 and All keep the day's width and scroll horizontally; the
+  edge that still hides bars fades through the same 24dp mask as the heatmap. The value axis
+  (maximum, half, zero) and its grid lines stay fixed in a 40dp gutter while the bars scroll under
+  them. Date labels (`MMM d`) sit inside the scrolling content and mark every slot that fits its
+  neighbour's width. Bars keep a 3dp gap and a 6dp corner radius, capped at half the bar width. The
+  picked (or latest) bar's date and tokens are captioned under the plot. The By source breakdown
+  stays removed. By model uses the segmented bar and legend of the Storage page; at most six
+  segments, the rest folded into Other, legend values "tokens · percent". The card opens with the
+  period's total: a small "Total tokens" label over the figure in `headlineMedium` bold, both left
+  aligned, with the bar below.
+- **Loading.** Unlike Storage, the page keeps an in-card spinner with "Counting…", dimmed previous
+  values, placeholders on first load, no page-level progress bar. The spinner is 16dp with a 2dp
+  stroke and a bodyMedium label 8dp away. A reload that finishes within 200ms never shows the
+  counting state, and one that does show it stays up for at least 400ms, so a request-ledger write
+  does not blink the page. Placeholder blocks and an empty segmented bar fill with a slow
+  left-to-right shimmer (1100ms), which becomes a solid fill when motion is disabled.
+- **Data.** `usage_ledger` (DB 48) holds per-request totals in 15-minute UTC buckets keyed by
+  provider, model and source (Chat, Task, Subagent, Title, Transcription). `UsageRecorder` writes one
+  row update when a Provider request ends (chat generation, title generation, transcription); a
+  request that never received a response is not counted. DB 49 folds the usage already stored on
+  MODEL messages into the ledger once, during the upgrade: one request per run, provider taken from
+  the model name prefix, source from the conversation's task or parent link. Older data therefore
+  appears without the page ever reading `messages`. Ledger rows are kept when conversations are
+  deleted. `UsageStats` assigns buckets to local days in the device zone. An open page reloads when
+  `UsageRecorder.revision` changes.
 
 ## Appearance defaults
 
@@ -332,13 +448,48 @@ in the existing editor. Source links retain the established external-link icon a
 
 ## Add Provider creation editor
 
-- Add Provider on the Providers list navigates to a separate full-page editor through the shared
-  Settings transition owner, never an Add Provider dialog. Existing provider destinations stay unchanged.
-- Reuse the collapsing Settings scaffold, icon/field rows and named groups. Keep the current protocol
-  selector, Provider name and Base URL fields, name-conflict policy and required URL validation.
-- Only explicit Save creates a provider. Back uses the shared unsaved-draft guard and never persists
-  partial values. Save trims the name and URL and returns to the existing Providers list.
+- Add Provider opens the same remote Provider editor the detail route uses, in creation mode: the
+  Provider name, connection (protocol and Base URL), API keys and advanced cache groups are the same
+  fields by construction, so a field can never exist on only one of the two routes.
+- The editor starts from an empty draft with the OpenAI-compatible protocol. The protocol selector,
+  name-conflict policy, required URL validation and the unsaved-draft guard are unchanged.
+- Only explicit Save creates a provider: the config, URL, keys, cache fields and list membership are
+  one edit. Save trims the name and URL and returns to the existing Providers list.
 - Provider documentation uses the shared FAB, visibility setting and bottom clearance.
+
+## Provider list and remote detail editor
+
+- The Providers root shows only the user's ordered Provider list. Entries are built-in remote
+  Providers or custom Providers; Local is a separate group fixed at the bottom and never in the list.
+  Each row keeps the existing icon, key count / URL / Not configured summary and custom protocol
+  badge, ends with a DragHandle, and opens the detail page on a whole-row tap. An empty list shows
+  one muted "No Providers yet" row above the add item.
+- Rows reorder by dragging the handle; the order is persisted once when the drag ends and is the
+  Provider order of the chat model selector and the Models page groups (customs map to their
+  Provider ID there). The lifted row follows the finger with all corners at 24dp, a slight scale and
+  shadow; rows it passes slide into their new slot with a spring instead of jumping. On release the
+  row springs into its slot and every corner radius animates to its positional group shape.
+- The add item at the bottom of the list opens a full-page search picker with a Custom group (one
+  Custom Provider row that opens the Add Provider creation editor) and a Built-in group of all
+  remote built-ins filtered by the query. Every picker row has a supporting line so all rows share
+  one height: Custom Provider describes the compatible protocols, listed built-ins are disabled and
+  read Added, unlisted built-ins show their retained key count, URL or Not configured. Tapping
+  an unlisted built-in opens its detail page; saving that page appends it, and Back from there
+  returns to the picker. Saving the custom creation editor returns to the root.
+- Long press: built-ins offer Remove, customs offer Rename and Delete; this menu is the only place
+  for both. Removing a built-in confirms first and states that its configuration is kept. Removal only unlists it:
+  keys, Base URL and fetched models stay stored, its enabled models move to a parked set that is
+  restored when it is added again, and model sync skips unlisted built-ins. Conversations that used
+  a removed Provider follow the existing unavailable-model fallback.
+- Migration: when no list is stored, built-ins with a key (Ollama: a Base URL) and every custom are
+  listed in catalog order; the derived list is persisted on start. Welcome onboarding adds the
+  built-in it configures. `providerList` and `hiddenProviderModels` are portable settings.
+- Remote Provider detail pages are explicit-save editors: Base URL, protocol, Responses API, cache
+  switch and duration, API key add/edit/delete, the active key and the custom Provider Name field
+  form one in-memory draft (never saveable state, because it holds keys). The top bar Save commits
+  the draft in one DataStore edit; Back uses the shared unsaved-changes guard. An unchanged draft
+  follows external writes. The top bar holds only Save, with no overflow menu. Provider -> Local is
+  unchanged.
 
 ## Shell device list and editors
 
@@ -555,6 +706,11 @@ in the existing editor. Source links retain the established external-link icon a
   actions, and dialogs are explicitly in scope.
 - Field labels, descriptions, helper text, and status text use sentence case.
   Status text has no trailing period.
+- Storage and Usage name their own surfaces in Title Case: `Total`, `Conversations`, `Activity`,
+  `Overview`, `Token Statistics`, `Tokens per Day`, `Tokens per Week`, `Tokens per Model`,
+  `Total Tokens`, `Total Requests`, `Current Streak`, `Longest Streak`, `Cached Input`,
+  `Cache Hit Rate`, `Local Models`, `Tool Calls`, `Delete %1$d Conversations?`. Only descriptions,
+  counts and captions (`1924 messages`, `Nov 19, 2026 · 94M tokens`) stay in sentence case.
 - Confirmation dialog titles are bold and end with a question mark.
 - Other locales use their native casing and punctuation conventions.
 - Every default string key must exist in every supported locale.
